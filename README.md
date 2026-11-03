@@ -31,7 +31,9 @@ Funciona como **app web instalable** (Android e iPhone, desde el enlace de Netli
 3. En Supabase, **Authentication › Providers › Google**: actívalo y pega el *Client ID* y el *Client Secret*.
 
 ### 3. Netlify (app web)
-1. **Site configuration › Environment variables**: añade
+> La URL y la clave pública del proyecto ya están puestas en `src/config.ts`; las variables de entorno solo hacen falta si cambias de proyecto.
+
+1. (Opcional) **Site configuration › Environment variables**: añade
    - `VITE_SUPABASE_URL` = Project URL de Supabase
    - `VITE_SUPABASE_ANON_KEY` = clave anon public
 2. **Deploys › Trigger deploy**. `netlify.toml` ya indica cómo compilar (`npm run build`, carpeta `dist`).
