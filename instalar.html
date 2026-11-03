@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E0E10">
+<meta name="color-scheme" content="dark">
+<title>Instalar ZEVRA</title>
+<meta name="description" content="Descarga ZEVRA en tu Android o iPhone en un minuto.">
+<meta property="og:title" content="Instalar ZEVRA">
+<meta property="og:description" content="Gente real. Conexiones reales. Instala la app en Android o iPhone.">
+<meta property="og:image" content="/icons/icon-512.png">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0E0E10;--graphite:#242428;--coral:#FF3B6B;--coral-mid:#FF86A4;--violet:#7A4DFF;--cream:#F6F0EB;--mist:#909095;--ok:#6BE3A6}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+html{background:#1B1433}
+html,body{color:var(--cream);font:500 15px/1.5 Manrope,system-ui,sans-serif}
+body{min-height:100dvh;background:linear-gradient(160deg,#0E0E10 0%,#1B1433 60%,#3B2580 100%)}
+main{max-width:480px;margin:0 auto;padding:calc(40px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom))}
+.brand{display:flex;align-items:center;gap:14px}
+.brand img{width:64px;height:64px;border-radius:16px}
+h1{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:1.1;margin:28px 0 8px}
+.lead{color:var(--mist)}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:52px;border-radius:14px;border:0;font:800 15px Manrope,system-ui,sans-serif;cursor:pointer;text-decoration:none}
+.primary{background:var(--coral);color:var(--ink);margin-top:24px}
+.ghost{background:none;color:var(--cream);border:1px solid rgba(246,240,235,.22);margin-top:10px}
+.card{background:rgba(36,36,40,.85);border:1px solid rgba(246,240,235,.08);border-radius:18px;padding:18px;margin-top:16px}
+.card.hl{border-color:rgba(255,59,107,.55)}
+.card h2{font-size:17px;font-weight:800;display:flex;align-items:center;gap:8px}
+ol{margin:12px 0 0 0;padding:0;list-style:none;counter-reset:s;display:grid;gap:10px}
+ol li{counter-increment:s;display:flex;gap:12px;align-items:flex-start}
+ol li::before{content:counter(s);flex:none;width:24px;height:24px;border-radius:50%;background:rgba(255,59,107,.16);color:var(--coral-mid);font-weight:800;font-size:12.5px;display:flex;align-items:center;justify-content:center;margin-top:1px}
+b{font-weight:800}
+.tag{font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--coral-mid)}
+.note{color:var(--mist);font-size:13px;margin-top:20px}
+.ok{color:var(--ok)}
+svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+:focus-visible{outline:2px solid var(--coral-mid);outline-offset:2px}
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><img src="/icons/icon-192.png" alt=""><div><div style="font-weight:800;font-size:26px;letter-spacing:.06em">ZEVRA</div><div class="tag">Gente real. Conexiones reales.</div></div></div>
+
+  <h1>Instala ZEVRA en tu móvil</h1>
+  <p class="lead">Sin tiendas de apps: se instala desde este enlace, ocupa menos de 1 MB y se actualiza sola.</p>
+
+  <p id="status" class="note ok" hidden></p>
+  <button id="install" class="btn primary" type="button" hidden>Instalar ZEVRA</button>
+  <a class="btn ghost" href="/">Abrir ZEVRA en el navegador</a>
+
+  <section class="card" id="ios">
+    <h2><svg viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg> iPhone y iPad</h2>
+    <ol>
+      <li><span>Abre este enlace en <b>Safari</b>.</span></li>
+      <li><span>Pulsa <b>Compartir</b> <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m8 7 4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg> en la barra inferior.</span></li>
+      <li><span>Elige <b>Añadir a pantalla de inicio</b> y pulsa <b>Añadir</b>.</span></li>
+    </ol>
+  </section>
+
+  <section class="card" id="android">
+    <h2><svg viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg> Android</h2>
+    <ol>
+      <li><span>Abre este enlace en <b>Chrome</b>.</span></li>
+      <li><span>Pulsa <b>Instalar ZEVRA</b> arriba, o el menú <b>⋮</b> › <b>Instalar app</b>.</span></li>
+      <li><span>Confirma con <b>Instalar</b>. Aparecerá en tu cajón de apps.</span></li>
+    </ol>
+  </section>
+
+  <p class="note">La primera vez que hagas una llamada, ZEVRA te pedirá permiso para usar la cámara y el micrófono. Solo para mayores de 18 años.</p>
+</main>
+<script>
+(function(){
+  var ua=navigator.userAgent,isIOS=/iPhone|iPad|iPod/.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1),isAndroid=/Android/.test(ua);
+  var standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+  var ios=document.getElementById('ios'),and=document.getElementById('android'),btn=document.getElementById('install'),st=document.getElementById('status');
+  if(isIOS){ios.classList.add('hl');ios.parentNode.insertBefore(and,ios.nextSibling)}else if(isAndroid){and.classList.add('hl');ios.parentNode.insertBefore(and,ios)}
+  if(standalone){st.textContent='ZEVRA ya está instalada en este dispositivo.';st.hidden=false}
+  var d=null;
+  addEventListener('beforeinstallprompt',function(e){e.preventDefault();d=e;btn.hidden=false});
+  btn.onclick=function(){if(!d)return;d.prompt();d.userChoice.then(function(c){if(c.outcome==='accepted'){btn.hidden=true;st.textContent='¡Listo! Busca ZEVRA en tu pantalla de inicio.';st.hidden=false}d=null})};
+  addEventListener('appinstalled',function(){btn.hidden=true;st.textContent='¡Listo! Busca ZEVRA en tu pantalla de inicio.';st.hidden=false});
+  if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('/sw.js').catch(function(){});
+})();
+</script>
+</body>
+</html>
