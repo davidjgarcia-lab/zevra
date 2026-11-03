@@ -401,7 +401,7 @@ export function Settings() {
           <button className="btn soft" onClick={() => supabase.auth.signOut()}><Icon n="logout" c="s" /> Cerrar sesión</button>
           <button className="btn danger" onClick={() => setConfirmDel(true)}><Icon n="trash" c="s" /> Eliminar mi cuenta</button>
         </div>
-        <p className="tiny muted center" style={{ marginTop: 16 }}>ZEVRA 1.0 · Solo para mayores de 18 años</p>
+        <p className="tiny muted center" style={{ marginTop: 16 }}><a className="link" href="/condiciones" target="_blank" rel="noopener">Condiciones</a> · <a className="link" href="/privacidad" target="_blank" rel="noopener">Privacidad</a><br />ZEVRA 1.0 · Solo para mayores de 18 años</p>
       </div></main>
       {confirmDel && <ConfirmSheet title="¿Eliminar tu cuenta?" text="Se borrarán tu perfil, tus fotos, tus mensajes y tus valoraciones. No se puede deshacer." confirm="Eliminar definitivamente" danger onConfirm={deleteAccount} onClose={() => setConfirmDel(false)} />}
       {info && (

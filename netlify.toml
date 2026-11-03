@@ -10,6 +10,16 @@
   to = "/instalar.html"
   status = 200
 
+[[redirects]]
+  from = "/privacidad"
+  to = "/privacidad.html"
+  status = 200
+
+[[redirects]]
+  from = "/condiciones"
+  to = "/condiciones.html"
+  status = 200
+
 [[headers]]
   for = "/*"
   [headers.values]

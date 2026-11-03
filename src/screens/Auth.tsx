@@ -64,7 +64,7 @@ export function Auth() {
           <button className="btn primary" onClick={() => setView('register')}>Crear cuenta con email</button>
           <button className="btn ghost" onClick={() => setView('login')}>Ya tengo cuenta</button>
           {err && <p className="err center" style={{ margin: 0 }}>{err}</p>}
-          <p className="tiny muted center" style={{ marginTop: 6 }}>Solo mayores de 18 años · Verificación con DNI obligatoria</p>
+          <p className="tiny muted center" style={{ marginTop: 6 }}>Solo mayores de 18 años · Verificación con DNI obligatoria<br /><a className="link" href="/condiciones" target="_blank" rel="noopener">Condiciones</a> · <a className="link" href="/privacidad" target="_blank" rel="noopener">Privacidad</a></p>
         </div>
       </div>
     );
@@ -118,7 +118,7 @@ export function Auth() {
               <button type="button" className="icon-btn" onClick={() => setShowPass(!showPass)} aria-label={showPass ? 'Ocultar contraseña' : 'Mostrar contraseña'}><Icon n={showPass ? 'eyeOff' : 'eye'} c="s" /></button>
             </span></label>
         )}
-        {reg && <div style={{ marginBottom: 14 }}><Check on={adult} onChange={setAdult}>Tengo 18 años o más y acepto las Condiciones y la Política de privacidad. Verificaré mi edad con mi DNI.</Check></div>}
+        {reg && <div style={{ marginBottom: 14 }}><Check on={adult} onChange={setAdult}>Tengo 18 años o más y acepto las <a className="link" href="/condiciones" target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}>Condiciones</a> y la <a className="link" href="/privacidad" target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}>Política de privacidad</a>. Verificaré mi edad con mi DNI.</Check></div>}
         {view === 'login' && <button type="button" className="tiny link" style={{ margin: '-4px 0 16px' }} onClick={() => { setErr(''); setView('forgot'); }}>¿Has olvidado tu contraseña?</button>}
         {err && <p className="err">{err}</p>}
         <button className="btn primary" disabled={busy}>{busy ? 'Un momento…' : view === 'login' ? 'Entrar' : view === 'register' ? 'Crear cuenta' : 'Enviar enlace'}</button>
