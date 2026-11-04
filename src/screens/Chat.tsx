@@ -6,6 +6,7 @@ import { ls, useApp } from '../store';
 import { Avatar, Icon, Sheet, Spinner, timeAgo, useToast } from '../ui';
 import { EPHEMERAL_PHOTO_SECONDS } from '../config';
 import { ReportSheet } from './Sheets';
+import { warmUp } from '../lib/rtc';
 
 /* ===================== Lista de conversaciones ===================== */
 export function Chats() {
@@ -92,6 +93,7 @@ export function ChatRoom({ partnerId }: { partnerId: string }) {
 
   useEffect(() => {
     supabase.from('profile_cards').select('*').eq('id', partnerId).maybeSingle().then(({ data }) => setPartner(data as ProfileCard));
+    const warm = window.setTimeout(warmUp, 1500);
     load();
     const upsert = (m: Message) => setMsgs((xs) => {
       if (!xs) return [m];
@@ -108,7 +110,7 @@ export function ChatRoom({ partnerId }: { partnerId: string }) {
         const m = p.new as Message; if (m.recipient === partnerId) upsert(m);
       })
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return () => { clearTimeout(warm); supabase.removeChannel(ch); };
   }, [load, myId, partnerId, refreshUnread]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [msgs?.length]);

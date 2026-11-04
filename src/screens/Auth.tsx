@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { errText, supabase } from '../lib/supabase';
 import { signInWithGoogle, isNative } from '../lib/native';
 import { Check, GoogleLogo, Icon, Stripes, ZMark, useToast } from '../ui';
+import { InstallButton } from './Install';
 
 type View = 'splash' | 'login' | 'register' | 'forgot' | 'sent';
 
@@ -54,6 +55,7 @@ export function Auth() {
       <div className="full" style={{ background: 'var(--g-night)' }}>
         <Stripes seed={33} color="#FF3B6B" opacity={0.16} />
         <div className="glow" style={{ width: 300, height: 300, right: -120, top: -60, background: '#FF3B6B', opacity: 0.25 }} />
+        <div style={{ position: 'absolute', top: 'calc(14px + var(--st))', right: 14, zIndex: 3 }}><InstallButton variant="pill" /></div>
         <div className="fade" style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, paddingBottom: 140 }}>
           <ZMark size={92} color="var(--cream)" />
           <div style={{ fontWeight: 800, letterSpacing: '.06em', fontSize: 40, lineHeight: 1 }}>ZEVRA</div>

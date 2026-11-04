@@ -20,6 +20,8 @@ await db.exec(stub);
 const schema = fs.readFileSync(new URL('../supabase/schema.sql', import.meta.url), 'utf8');
 try { await db.exec(schema); } catch (e) { console.log("SQL ERROR:", e.message, e.position, e.where); process.exit(1); }
 await db.exec(schema); // idempotente
+const upgrade = fs.readFileSync(new URL('../supabase/upgrade-02.sql', import.meta.url), 'utf8');
+try { await db.exec(upgrade); await db.exec(upgrade); } catch (e) { console.log('UPGRADE ERROR:', e.message); process.exit(1); }
 console.log('schema OK x2');
 
 const U = {};
@@ -109,4 +111,21 @@ await expect('denuncia', ()=>as(U.ben, `insert into reports (reported, reason) v
 await expect('anon no ve perfiles', async()=>{ await db.exec(`set role anon`); try { await db.query('select * from profiles'); throw new Error('ve'); } catch(e){ if(e.message==='ve') throw e; } finally { await db.exec('reset role'); } });
 await expect('borrar cuenta', ()=>as(U.cris, `select delete_my_account()`));
 await expect('cris borrada', async()=>{ const r = await db.query(`select count(*)::int n from profiles where id=$1`, [U.cris]); if (r.rows[0].n) throw new Error('sigue'); });
+// ---- actualización 02: preferencias y «me gusta»
+const D = {};
+for (const n of ['dani','eva','fer']) { const r = await db.query(`insert into auth.users (raw_user_meta_data) values ($1) returning id`, [JSON.stringify({alias: n})]); D[n] = r.rows[0].id; }
+for (const [n,h] of [['dani','d'],['eva','e'],['fer','f']]) await as(D[n], `select verify_age('1990-01-01','2031-01-01',$1)`, [h.repeat(64)]);
+await expect('dani pone género y preferencia', ()=>as(D.dani, `update profiles set gender='hombre', seeking='{mujer}' where id=$1`, [D.dani]));
+await expect('eva mujer, busca hombres', ()=>as(D.eva, `update profiles set gender='mujer', seeking='{hombre}' where id=$1`, [D.eva]));
+await expect('fer hombre, busca hombres', ()=>as(D.fer, `update profiles set gender='hombre', seeking='{hombre}' where id=$1`, [D.fer]));
+await db.query('delete from match_queue');
+await expect('fer espera', ()=>as(D.fer, `select find_match('voice','p-fer')`));
+await expect('dani no empareja con fer (busca mujeres)', async()=>{ const r = await rows(D.dani, `select find_match('voice','p-dani') as r`); if (r[0].r) throw new Error('emparejó mal'); });
+await expect('eva empareja con dani', async()=>{ const r = await rows(D.eva, `select find_match('voice','p-eva') as r`); if (r[0].r?.partner_id !== D.dani) throw new Error(JSON.stringify(r)); });
+await expect('me gusta sin conexión', ()=>as(D.fer, `select like_user($1)`, [D.eva]), true);
+await expect('eva da me gusta (no mutuo)', async()=>{ const r = await rows(D.eva, `select like_user($1) as m`, [D.dani]); if (r[0].m !== false) throw new Error('mutuo?'); });
+await expect('dani da me gusta (mutuo)', async()=>{ const r = await rows(D.dani, `select like_user($1) as m`, [D.eva]); if (r[0].m !== true) throw new Error('no mutuo'); });
+await expect('fer no ve likes ajenos', async()=>{ const r = await rows(D.fer, `select * from likes`); if (r.length) throw new Error('ve'); });
+await expect('tarjeta con género', async()=>{ const r = await rows(D.fer, `select gender from profile_cards where id=$1`, [D.eva]); if (r[0].gender !== 'mujer') throw new Error(JSON.stringify(r)); });
+await expect('no puede poner género inválido', ()=>as(D.fer, `update profiles set gender='otro' where id=$1`, [D.fer]), true);
 console.log(`\n${ok} OK, ${fail} FALLOS`); if (fail) process.exit(1);

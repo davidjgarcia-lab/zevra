@@ -15,3 +15,6 @@ export const NATIVE_REDIRECT = `${NATIVE_SCHEME}://auth`;
 export const RATE_MIN_SECONDS = 240;
 // Fotos efímeras del chat: segundos visibles
 export const EPHEMERAL_PHOTO_SECONDS = 10;
+
+// Descarga directa de la app de Android (la publica GitHub Actions en cada cambio)
+export const APK_URL = 'https://github.com/davidjgarcia-lab/zevra/releases/latest/download/zevra.apk';

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { CONFIGURED } from './config';
 import { supabase, type Mode, type ProfileCard } from './lib/supabase';
@@ -7,12 +7,25 @@ import { ShieldOverlay, useScreenShield } from './lib/protect';
 import { Ctx, ls, type AppCtx, type CallFlow, type Route, type Tab } from './store';
 import { Icon, Logo, Spinner, ToastProvider, useToast } from './ui';
 import { Auth, NewPassword } from './screens/Auth';
-import { Verify } from './screens/Verify';
-import { Onboarding } from './screens/Onboarding';
-import { History, Home } from './screens/Home';
-import { Call, IncomingCall } from './screens/Call';
-import { ChatRoom, Chats } from './screens/Chat';
-import { EditProfile, MyProfile, Settings, UserProfile } from './screens/Profile';
+import { Home } from './screens/Home';
+import { InstallButton } from './screens/Install';
+import { closePeer, warmUp } from './lib/rtc';
+
+// Carga diferida: cada pantalla se descarga solo cuando se usa (arranque más rápido)
+const Verify = lazy(() => import('./screens/Verify').then((m) => ({ default: m.Verify })));
+const Onboarding = lazy(() => import('./screens/Onboarding').then((m) => ({ default: m.Onboarding })));
+const History = lazy(() => import('./screens/Home').then((m) => ({ default: m.History })));
+const loadCall = () => import('./screens/Call');
+const Call = lazy(() => loadCall().then((m) => ({ default: m.Call })));
+const IncomingCall = lazy(() => loadCall().then((m) => ({ default: m.IncomingCall })));
+const loadChat = () => import('./screens/Chat');
+const ChatRoom = lazy(() => loadChat().then((m) => ({ default: m.ChatRoom })));
+const Chats = lazy(() => loadChat().then((m) => ({ default: m.Chats })));
+const loadProfile = () => import('./screens/Profile');
+const EditProfile = lazy(() => loadProfile().then((m) => ({ default: m.EditProfile })));
+const MyProfile = lazy(() => loadProfile().then((m) => ({ default: m.MyProfile })));
+const Settings = lazy(() => loadProfile().then((m) => ({ default: m.Settings })));
+const UserProfile = lazy(() => loadProfile().then((m) => ({ default: m.UserProfile })));
 
 export default function App() {
   return <ToastProvider><Root /></ToastProvider>;
@@ -23,6 +36,7 @@ function Root() {
   const toast = useToast();
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [me, setMe] = useState<ProfileCard | null>(null);
+  const [meMissing, setMeMissing] = useState(false);
   const [recovery, setRecovery] = useState(false);
   const [onboarded, setOnboarded] = useState(false);
 
@@ -32,22 +46,29 @@ function Root() {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: sub } = supabase.auth.onAuthStateChange((ev, s) => {
       if (ev === 'PASSWORD_RECOVERY') setRecovery(true);
-      setSession(s);
+      if (ev === 'SIGNED_OUT') closePeer();
+      // Al renovar el token llega un objeto nuevo con el mismo usuario: no hace falta repintar todo
+      setSession((old) => (old && s && old.user.id === s.user.id && ev === 'TOKEN_REFRESHED' ? old : s));
     });
     return () => sub.subscription.unsubscribe();
   }, [toast]);
 
   const refreshMe = useCallback(async () => {
     if (!session) { setMe(null); return; }
-    const { data } = await supabase.from('profile_cards').select('*').eq('id', session.user.id).maybeSingle();
-    setMe((data as ProfileCard) ?? null);
+    const { data, error } = await supabase.from('profile_cards').select('*').eq('id', session.user.id).maybeSingle();
+    if (data) { setMe(data as ProfileCard); setMeMissing(false); } else setMeMissing(true);
+    if (error) toast('No se pudo cargar tu perfil. Revisa tu conexión.', true);
   }, [session]);
   useEffect(() => {
     if (session) { setOnboarded(ls.get(`zevra-onb-${session.user.id}`) === '1'); refreshMe(); } else setMe(null);
   }, [session, refreshMe]);
 
+  // Precargar en segundo plano las pantallas más usadas
+  useEffect(() => { if (me?.verified) { const t = setTimeout(() => { loadCall(); loadChat(); loadProfile(); }, 2500); return () => clearTimeout(t); } }, [me?.verified]);
+
   let body: JSX.Element;
   if (!CONFIGURED) body = <NotConfigured />;
+  else if (session && !me && meMissing) body = <ProfileMissing onRetry={refreshMe} />;
   else if (session === undefined || (session && !me)) body = <Loading />;
   else if (recovery && session) body = <NewPassword onDone={() => setRecovery(false)} />;
   else if (!session) body = <Auth />;
@@ -57,7 +78,7 @@ function Root() {
 
   return (
     <div className="app">
-      {body}
+      <Suspense fallback={<Loading />}>{body}</Suspense>
       {hidden && <ShieldOverlay />}
     </div>
   );
@@ -65,6 +86,20 @@ function Root() {
 
 function Loading() {
   return <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 20, alignItems: 'center', justifyContent: 'center' }}><Logo s={26} /><Spinner /></div>;
+}
+
+function ProfileMissing({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="scroll"><div className="pad center" style={{ paddingTop: 'calc(80px + var(--st))' }}>
+      <Logo s={24} />
+      <h1 className="h2" style={{ margin: '24px 0 10px' }}>No encontramos tu perfil</h1>
+      <p className="muted small">Puede ser un fallo de conexión. Si persiste, cierra sesión y vuelve a entrar.</p>
+      <div className="grid" style={{ marginTop: 22 }}>
+        <button className="btn primary" onClick={onRetry}>Reintentar</button>
+        <button className="btn" onClick={() => supabase.auth.signOut()}>Cerrar sesión</button>
+      </div>
+    </div></div>
+  );
 }
 
 function NotConfigured() {
@@ -102,6 +137,7 @@ function Main({ session, me, refreshMe }: { session: Session; me: ProfileCard; r
 
   useEffect(() => {
     refreshUnread(); refreshRequests();
+    supabase.rpc('close_stale_calls').then(() => {});
     const ch = supabase.channel(`inbox-${myId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `recipient=eq.${myId}` }, () => refreshUnread())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'photo_access', filter: `owner=eq.${myId}` }, () => refreshRequests())
@@ -110,6 +146,7 @@ function Main({ session, me, refreshMe }: { session: Session; me: ProfileCard; r
         if (row.status !== 'ringing') return;
         const { data } = await supabase.from('profile_cards').select('*').eq('id', row.caller).maybeSingle();
         setInvite({ id: row.id, caller: row.caller, mode: row.mode, partner: data as ProfileCard });
+        warmUp();
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'call_invites', filter: `callee=eq.${myId}` }, (p) => {
         const row = p.new as { id: string; status: string };
@@ -141,6 +178,7 @@ function Main({ session, me, refreshMe }: { session: Session; me: ProfileCard; r
     default: screen = (
       <>
         {tab !== 'profile' && <header className="topbar"><div className="title"><Logo /></div>
+          <InstallButton />
           <button className="icon-btn" onClick={() => go({ name: 'tabs', tab: 'profile' })} aria-label={`Solicitudes de fotos${requests ? `, ${requests} pendientes` : ''}`}><Icon n="bell" />{requests > 0 && <span className="badge">{requests}</span>}</button>
           <button className="icon-btn" onClick={() => go({ name: 'settings' })} aria-label="Ajustes"><Icon n="settings" /></button></header>}
         <main className="scroll">{tab === 'home' ? <Home /> : tab === 'chats' ? <Chats /> : <MyProfile />}</main>
@@ -157,13 +195,15 @@ function Main({ session, me, refreshMe }: { session: Session; me: ProfileCard; r
 
   return (
     <Ctx.Provider value={ctx}>
-      {screen}
+      <Suspense fallback={<div style={{ flex: 1 }} />}>{screen}</Suspense>
+      <Suspense fallback={null}>
       {call && <Call key={call.key} flow={call.flow} onClose={() => { setCall(null); refreshMe(); }} onAgain={() => setCall({ flow: call.flow.kind === 'invite-in' ? { kind: 'match', mode: call.flow.mode } : call.flow, key: Date.now() })} />}
       {invite && !call && (
         <IncomingCall inviteId={invite.id} partner={invite.partner} mode={invite.mode}
           onDecline={() => { supabase.rpc('answer_invite', { p_invite: invite.id, p_accept: false }).then(() => {}); setInvite(null); }}
           onAccept={() => { const i = invite; setInvite(null); startCall({ kind: 'invite-in', mode: i.mode, partner: i.caller, inviteId: i.id }); }} />
       )}
+      </Suspense>
     </Ctx.Provider>
   );
 }

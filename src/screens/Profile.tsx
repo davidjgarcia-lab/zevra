@@ -6,6 +6,7 @@ import { isNative } from '../lib/native';
 import { INTERESTS, ls, useApp } from '../store';
 import { Avatar, Icon, Sheet, Spinner, Stars, Stripes, Toggle, timeAgo, useToast } from '../ui';
 import { ConfirmSheet, ReportSheet } from './Sheets';
+import { InstallButton } from './Install';
 
 /* ---------------- Foto con URL firmada ---------------- */
 function PhotoTile({ photo, onOpen, locked }: { photo?: Photo; onOpen?: () => void; locked?: boolean }) {
@@ -307,6 +308,7 @@ export function EditProfile() {
   const [alias, setAlias] = useState(me.alias);
   const [bio, setBio] = useState(me.bio);
   const [pronouns, setPronouns] = useState(me.pronouns);
+  const [gender, setGender] = useState<string>(me.gender ?? '');
   const [interests, setInterests] = useState<string[]>(me.interests);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -314,7 +316,7 @@ export function EditProfile() {
     e.preventDefault();
     if (alias.trim().length < 2) return setErr('El alias debe tener al menos 2 caracteres.');
     setBusy(true);
-    const { error } = await supabase.from('profiles').update({ alias: alias.trim(), bio: bio.trim(), pronouns, interests }).eq('id', session.user.id);
+    const { error } = await supabase.from('profiles').update({ alias: alias.trim(), bio: bio.trim(), pronouns, interests, gender: gender || null }).eq('id', session.user.id);
     setBusy(false);
     if (error) return setErr(errText(error));
     await refreshMe(); toast('Perfil guardado'); back();
@@ -324,6 +326,10 @@ export function EditProfile() {
       <header className="topbar"><button className="icon-btn" style={{ marginLeft: -8 }} onClick={back} aria-label="Volver"><Icon n="arrowL" /></button><div className="title">Editar perfil</div></header>
       <main className="scroll"><form className="pad fade" onSubmit={save} style={{ paddingBottom: 30 }}>
         <label className="field"><span>Alias</span><input className="input" value={alias} onChange={(e) => setAlias(e.target.value)} maxLength={20} /></label>
+        <label className="field"><span>Me identifico como</span>
+          <select className="input" value={gender} onChange={(e) => setGender(e.target.value)}>
+            <option value="">Prefiero no decirlo</option><option value="mujer">Mujer</option><option value="hombre">Hombre</option><option value="no_binario">No binario</option>
+          </select></label>
         <label className="field"><span>Pronombres</span>
           <select className="input" value={pronouns} onChange={(e) => setPronouns(e.target.value)}>
             {['', 'ella', 'él', 'elle'].map((p) => <option key={p} value={p}>{p || 'Prefiero no decirlo'}</option>)}
@@ -363,6 +369,18 @@ export function Settings() {
   const unblock = async (id: string) => { await supabase.from('blocks').delete().eq('blocker', session.user.id).eq('blocked', id); toast('Desbloqueado'); loadBlocks(); };
   const setC = (k: 'voice' | 'intimate', v: boolean) => { ls.set(`zevra-consent-${me.id}-${k}`, v ? '1' : '0'); setConsent({ ...consent, [k]: v }); if (!v) toast('Consentimiento retirado'); };
   const deleteAccount = async () => {
+    // Borrar primero sus archivos (fotos, avatar y medios de chat sin abrir)
+    try {
+      const uid = session.user.id;
+      const paths: string[] = [];
+      for (const sub of ['public', 'private', 'avatar']) {
+        const { data } = await supabase.storage.from('photos').list(`${uid}/${sub}`, { limit: 1000 });
+        (data ?? []).forEach((f) => paths.push(`${uid}/${sub}/${f.name}`));
+      }
+      if (paths.length) await supabase.storage.from('photos').remove(paths);
+      const { data: chat } = await supabase.storage.from('chat-media').list(uid, { limit: 1000 });
+      if (chat?.length) await supabase.storage.from('chat-media').remove(chat.map((f) => `${uid}/${f.name}`));
+    } catch { /* si falla, se borra igualmente la cuenta */ }
     const { error } = await supabase.rpc('delete_my_account');
     if (error) return toast(errText(error), true);
     await supabase.auth.signOut(); toast('Tu cuenta se ha eliminado');
@@ -372,6 +390,7 @@ export function Settings() {
     <>
       <header className="topbar"><button className="icon-btn" style={{ marginLeft: -8 }} onClick={back} aria-label="Volver"><Icon n="arrowL" /></button><div className="title">Ajustes</div></header>
       <main className="scroll"><div className="pad fade" style={{ paddingBottom: 30 }}>
+        <div style={{ margin: '8px 0 16px' }}><InstallButton variant="row" /></div>
         <div className="label muted" style={{ margin: '8px 0' }}>Cuenta</div>
         <div className="card" style={{ padding: '4px 14px' }}>
           <div className="list-row between"><span>Email</span><span className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{session.user.email}</span></div>

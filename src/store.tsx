@@ -39,7 +39,7 @@ export function useApp(): AppCtx {
 export const MODES: Record<Mode, { n: string; name: string; title: string; desc: string; color: string; text: string; icon: string }> = {
   social: { n: '01', name: 'Social', title: 'Vídeo para conocer gente', desc: 'Conversaciones abiertas, cara a cara. Sin contenido íntimo.', color: '#C9C2BC', text: '#F6F0EB', icon: 'video' },
   voice: { n: '02', name: 'Voz', title: 'Solo voz, la mente primero', desc: 'Sin cámara. Conversaciones largas y cercanas.', color: '#7A4DFF', text: '#B9A4FF', icon: 'mic' },
-  intimate: { n: '03', name: 'Íntima', title: 'Vídeo íntimo, con permiso', desc: 'Cámara apagada al empezar. Imagen remota desenfocada hasta que tú decidas.', color: '#FF3B6B', text: '#FF86A4', icon: 'heart' },
+  intimate: { n: '03', name: 'Íntima', title: 'Vídeo íntimo, con permiso', desc: 'Vídeo para adultos que lo desean. Puedes difuminar la imagen o apagar tu cámara cuando quieras.', color: '#FF3B6B', text: '#FF86A4', icon: 'heart' },
 };
 
 export const REPORT_REASONS = [

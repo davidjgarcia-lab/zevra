@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client';
 import { App as CapApp } from '@capacitor/app';
 import App from './App';
 import { isNative } from './lib/native';
+import { initInstallCapture } from './lib/install';
+
+if (!isNative) initInstallCapture();
 import './styles.css';
 
 createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);

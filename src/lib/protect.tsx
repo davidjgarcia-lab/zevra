@@ -5,13 +5,11 @@
 //   quien mira, sin menú contextual, sin arrastrar ni guardar imágenes, y medios efímeros que se borran.
 import { useEffect, useState } from 'react';
 import { ZMark } from '../ui';
-import { isNative } from './native';
 
 export function useScreenShield() {
   const [hidden, setHidden] = useState(false);
   useEffect(() => {
     const onVis = () => setHidden(document.visibilityState === 'hidden');
-    const onBlur = () => { if (!isNative) setHidden(true); };
     const onFocus = () => setHidden(false);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'PrintScreen' || (e.metaKey && e.shiftKey && ['3', '4', '5', 's', 'S'].includes(e.key))) {
@@ -22,7 +20,6 @@ export function useScreenShield() {
     };
     const noMenu = (e: Event) => { const t = e.target as HTMLElement; if (!t.closest('input,textarea')) e.preventDefault(); };
     document.addEventListener('visibilitychange', onVis);
-    window.addEventListener('blur', onBlur);
     window.addEventListener('focus', onFocus);
     window.addEventListener('keyup', onKey);
     window.addEventListener('keydown', onKey);
@@ -30,7 +27,6 @@ export function useScreenShield() {
     document.addEventListener('dragstart', noMenu);
     return () => {
       document.removeEventListener('visibilitychange', onVis);
-      window.removeEventListener('blur', onBlur);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keyup', onKey);
       window.removeEventListener('keydown', onKey);

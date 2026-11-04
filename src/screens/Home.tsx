@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { supabase, type CallRow, type Mode } from '../lib/supabase';
+import { errText, GENDERS, supabase, type CallRow, type Gender, type Mode } from '../lib/supabase';
 import { MODES, ls, useApp } from '../store';
-import { Avatar, Check, Icon, Sheet, fmtDur, timeAgo } from '../ui';
+import { warmUp } from '../lib/rtc';
+import { InstallBanner } from './Install';
+import { Avatar, Check, Icon, Sheet, fmtDur, timeAgo, useToast } from '../ui';
 import { RateSheet } from './Sheets';
 
 export function useMyCalls(limit = 30) {
@@ -18,13 +20,54 @@ const CONSENTS: Record<Exclude<Mode, 'social'>, string[]> = {
   voice: ['Entiendo que nadie puede pedirme que encienda la cámara.', 'Puedo colgar en cualquier momento sin dar explicaciones.'],
   intimate: [
     'Soy mayor de edad y quiero ver y mostrar contenido íntimo con otras personas adultas.',
-    'Mi cámara empieza apagada y la imagen de la otra persona llega desenfocada hasta que yo decida.',
+    'Puedo apagar mi cámara, difuminar su imagen o pasar a la siguiente persona en cualquier momento.',
     'Nunca grabaré ni compartiré a nadie. Sé que hacerlo es delito y supone la expulsión.',
   ],
 };
 
+/** Personas conectadas ahora mismo (como el contador de OmeTV), con presencia en tiempo real. */
+function useOnline(myId: string) {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const ch = supabase.channel('zevra-online', { config: { presence: { key: myId } } });
+    ch.on('presence', { event: 'sync' }, () => setN(Object.keys(ch.presenceState()).length))
+      .subscribe((st) => { if (st === 'SUBSCRIBED') ch.track({ at: Date.now() }); });
+    return () => { supabase.removeChannel(ch); };
+  }, [myId]);
+  return n;
+}
+
+function Preferences() {
+  const { me, refreshMe } = useApp();
+  const toast = useToast();
+  const [gender, setGender] = useState<Gender | null>(me.gender ?? null);
+  const [seeking, setSeeking] = useState<Gender[]>(me.seeking ?? []);
+  const save = async (g: Gender | null, s: Gender[]) => {
+    setGender(g); setSeeking(s);
+    const { error } = await supabase.from('profiles').update({ gender: g, seeking: s }).eq('id', me.id);
+    if (error) toast(errText(error), true); else refreshMe();
+  };
+  const toggle = (g: Gender) => save(gender, seeking.includes(g) ? seeking.filter((x) => x !== g) : [...seeking, g]);
+  return (
+    <>
+      <div className="section-title"><span className="h3">Quiero conocer a</span><span className="tiny muted">{seeking.length ? 'Filtro activo' : 'Todo el mundo'}</span></div>
+      <div className="chips">
+        <button className={`chip ${seeking.length === 0 ? 'on' : ''}`} aria-pressed={seeking.length === 0} onClick={() => save(gender, [])}>Todos</button>
+        {GENDERS.map(([k, , plural]) => <button key={k} className={`chip ${seeking.includes(k) ? 'on' : ''}`} aria-pressed={seeking.includes(k)} onClick={() => toggle(k)}>{plural}</button>)}
+      </div>
+      {!gender && (
+        <div className="notice" style={{ marginTop: 10, flexDirection: 'column', gap: 8 }}>
+          <span><b>¿Cómo te identificas?</b> Lo usamos para respetar los filtros de los demás.</span>
+          <div className="chips">{GENDERS.map(([k, label]) => <button key={k} className="chip" onClick={() => save(k, seeking)}>{label}</button>)}</div>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function Home() {
   const { me, startCall, go } = useApp();
+  const online = useOnline(me.id);
   const [mode, setMode] = useState<Mode | null>(null);
   const [consentFor, setConsentFor] = useState<Exclude<Mode, 'social'> | null>(null);
   const [checks, setChecks] = useState<boolean[]>([]);
@@ -42,7 +85,11 @@ export function Home() {
 
   return (
     <div className="pad fade" style={{ paddingBottom: 24 }}>
-      <div className="label muted" style={{ marginTop: 8 }}>{hello}, {me.alias}</div>
+      <div className="between" style={{ marginTop: 8 }}>
+        <div className="label muted">{hello}, {me.alias}</div>
+        {online > 0 && <span className="tiny" style={{ color: 'var(--ok)', fontWeight: 800 }}>● {online} {online === 1 ? 'persona conectada' : 'personas conectadas'}</span>}
+      </div>
+      <InstallBanner />
       <h1 className="h1" style={{ margin: '6px 0 16px' }}>¿Cómo te apetece <span className="serif">conectar</span> hoy?</h1>
 
       {pending.length > 0 && (
@@ -55,7 +102,7 @@ export function Home() {
         {(Object.keys(MODES) as Mode[]).map((id) => {
           const m = MODES[id], sel = mode === id;
           return (
-            <button key={id} className={`mode ${sel ? 'sel' : ''}`} role="radio" aria-checked={sel} onClick={() => setMode(id)}
+            <button key={id} className={`mode ${sel ? 'sel' : ''}`} role="radio" aria-checked={sel} onClick={() => { setMode(id); warmUp(); }}
               style={{ borderColor: sel ? m.color : 'transparent', color: m.text, background: id === 'intimate' && sel ? 'linear-gradient(135deg,rgba(255,59,107,.16),rgba(122,77,255,.1)),var(--graphite)' : undefined }}>
               <div className="row" style={{ alignItems: 'flex-start' }}>
                 <span className="ic" style={{ background: `${m.color}22`, color: m.text }}><Icon n={m.icon} /></span>
@@ -74,6 +121,8 @@ export function Home() {
         {mode ? <>Empezar en {MODES[mode].name} <Icon n="arrowR" c="s" /></> : 'Elige una modalidad'}
       </button>
       <div className="row small muted" style={{ justifyContent: 'center', marginTop: 10, gap: 6 }}><Icon n="shield" c="s" /> Denunciar y bloquear, siempre a mano en la llamada</div>
+
+      <Preferences />
 
       <div className="section-title"><span className="h3">Recientes</span><button className="tiny link" onClick={() => go({ name: 'history' })}>Ver historial</button></div>
       {calls === null ? <div className="skel" style={{ height: 140 }} /> : calls.length === 0 ? (

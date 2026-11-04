@@ -37,6 +37,7 @@ input,textarea,select{font:inherit;color:inherit}
 .link{color:var(--coral-mid);font-weight:700}
 
 .btn{display:flex;align-items:center;justify-content:center;gap:8px;min-height:50px;padding:0 18px;border-radius:var(--r-btn);font-weight:800;font-size:15px;width:100%;transition:transform .18s var(--ease),opacity .18s}
+a.btn{text-decoration:none}
 .btn:active{transform:scale(.98)}
 .btn.primary{background:var(--coral);color:var(--ink)}
 .btn.secondary{background:var(--violet-deep);color:var(--cream)}
@@ -182,3 +183,37 @@ textarea.input{height:88px;padding:12px 14px;resize:none}
 .hero{position:absolute;inset:0;background:var(--g-night)}
 .video-dot{width:10px;height:10px;border-radius:50%;background:var(--coral);display:inline-block;animation:blink 1s infinite}
 @keyframes blink{50%{opacity:.3}}
+
+/* ===== Llamada v2 ===== */
+.main-video{position:absolute;inset:0;width:100%;height:100%;background:#000;z-index:1}
+.pip-video{position:absolute;right:14px;top:calc(64px + var(--st));width:104px;height:148px;border-radius:16px;overflow:hidden;z-index:6;background:var(--graphite);border:1px solid rgba(246,240,235,.18);box-shadow:0 8px 24px rgba(0,0,0,.45);cursor:pointer}
+.pip-off{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:11px;font-weight:700;color:var(--mist);text-align:center;cursor:default}
+.main-video.blur,.pip-video.blur{filter:blur(28px) saturate(.7)}
+.call-head{z-index:7}
+.side-tools{position:absolute;right:14px;top:calc(226px + var(--st));display:flex;flex-direction:column;gap:10px;z-index:7}
+.cc.sm{width:46px;height:46px}
+.cc.liked{background:var(--coral);color:var(--ink)}
+.cc.next{background:var(--cream);color:var(--ink);width:64px;height:64px}
+.controls{z-index:7}
+.partner-tag{position:absolute;left:14px;bottom:calc(104px + var(--sb));z-index:7;display:flex;flex-direction:column;gap:2px;padding:8px 12px;border-radius:14px;background:rgba(14,14,16,.72);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);max-width:62%}
+.call-chat{position:absolute;left:14px;right:76px;bottom:calc(168px + var(--sb));z-index:8;display:flex;flex-direction:column;gap:8px}
+.call-chat-list{display:flex;flex-direction:column;gap:5px;align-items:flex-start}
+.call-chat-msg{max-width:100%;padding:7px 11px;border-radius:14px;background:rgba(14,14,16,.78);font-size:14px;line-height:1.3;word-wrap:break-word;-webkit-user-select:text;user-select:text}
+.call-chat-msg.me{align-self:flex-end;background:rgba(255,59,107,.9);color:var(--ink)}
+.heart-fx{position:absolute;left:50%;top:50%;z-index:9;font-size:90px;pointer-events:none;animation:heart 1.4s var(--ease) forwards}
+@keyframes heart{0%{transform:translate(-50%,-50%) scale(.3);opacity:0}25%{transform:translate(-50%,-50%) scale(1.15);opacity:1}100%{transform:translate(-50%,-160%) scale(1);opacity:0}}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* ===== Hojas inferiores: fijas sobre toda la app y con scroll (antes el botón quedaba tapado) ===== */
+.scrim{position:fixed;z-index:200}
+.sheet{position:fixed;z-index:201;left:50%;right:auto;transform:translateX(-50%);width:100%;max-width:520px;max-height:min(88dvh,88vh);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding-bottom:calc(28px + var(--sb))}
+@keyframes up{from{transform:translate(-50%,100%)}to{transform:translate(-50%,0)}}
+
+/* Altura real en móviles (sin que la barra del navegador tape la navegación) */
+.app{height:100vh;height:100dvh}
+.toasts{position:fixed;z-index:300;left:50%;right:auto;transform:translateX(-50%);width:calc(100% - 32px);max-width:488px}
+.install-banner{display:flex;align-items:center;gap:12px;margin:12px 0 4px;padding:12px 12px 12px 14px;border-radius:var(--r-card);background:linear-gradient(135deg,rgba(255,59,107,.22),rgba(122,77,255,.22)),var(--graphite);border:1px solid rgba(255,134,164,.35)}
+.install-banner img{border-radius:12px;flex:none}
+.install-banner b{display:block;font-size:14.5px;font-weight:800}
+.install-banner span{display:block;font-size:12px;color:var(--mist);line-height:1.3;margin-top:2px}
+.install-banner .btn{flex:none}

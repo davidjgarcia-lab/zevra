@@ -12,7 +12,10 @@ export type Mode = 'social' | 'voice' | 'intimate';
 export interface ProfileCard {
   id: string; alias: string; bio: string; pronouns: string; interests: string[]; avatar_path: string | null;
   verified: boolean; age: number | null; respect_score: number | null; respect_count: number; connections: number;
+  gender?: Gender | null; seeking?: Gender[];
 }
+export type Gender = 'mujer' | 'hombre' | 'no_binario';
+export const GENDERS: Array<[Gender, string, string]> = [['mujer', 'Mujer', 'Mujeres'], ['hombre', 'Hombre', 'Hombres'], ['no_binario', 'No binario', 'No binarias']];
 export interface Photo { id: string; owner: string; path: string; is_private: boolean; created_at: string }
 export interface Message {
   id: string; sender: string; recipient: string; kind: 'text' | 'image' | 'video'; body: string | null;
