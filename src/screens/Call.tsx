@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type Peer from 'peerjs';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { errText, supabase, type ProfileCard } from '../lib/supabase';
-import { getLocalStream, openPeer, stopStream, type MediaConnection } from '../lib/rtc';
+import { getLocalStream, openPeer, playRemoteAudio, stopRemoteAudio, stopStream, type MediaConnection } from '../lib/rtc';
 import { MODES, ls, useApp, type CallFlow } from '../store';
 import { Avatar, Icon, Stars, ZMark, fmtClock, fmtDur, useToast } from '../ui';
 import { RATE_MIN_SECONDS } from '../config';
@@ -39,16 +39,20 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
   const [rateOpen, setRateOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
-  const [needsTap, setNeedsTap] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [byOther, setByOther] = useState(false);
+  const [swipeDx, setSwipeDx] = useState(0);
+  const [partnerAway, setPartnerAway] = useState(false);
+  const [shotAlert, setShotAlert] = useState(0);
 
   const localV = useRef<HTMLVideoElement>(null);
   const remoteV = useRef<HTMLVideoElement>(null);
-  const remoteA = useRef<HTMLAudioElement>(null);
   const R = useRef({
     peer: null as Peer | null, stream: null as MediaStream | null, mc: null as MediaConnection | null,
     callId: null as string | null, partnerId: null as string | null, inviteId: null as string | null,
     pending: new Map<string, MediaConnection>(), channels: [] as RealtimeChannel[], timers: [] as number[],
-    finished: false, live: false, alive: true, run: 0,
+    finished: false, live: false, alive: true, run: 0, gotStream: false, hasVideo: false,
+    recon: 0 as number, sig: null as RealtimeChannel | null,
     onCall: null as ((mc: MediaConnection) => void) | null,
   });
 
@@ -63,6 +67,9 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
     if (R.current.peer && R.current.onCall) R.current.peer.off('call', R.current.onCall);
     R.current.onCall = null;
     stopStream(R.current.stream);
+    stopRemoteAudio();
+    clearTimeout(R.current.recon);
+    if (R.current.sig) { supabase.removeChannel(R.current.sig); R.current.sig = null; }
     R.current.mc = null; R.current.peer = null; R.current.stream = null;
   };
 
@@ -73,7 +80,7 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
     teardown(); setError(msg); setPhase('error');
   };
 
-  const finish = async (byMe: boolean): Promise<number> => {
+  const finish = async (byMe: boolean, note?: string): Promise<number> => {
     if (R.current.finished) return 0;
     R.current.finished = true;
     const id = R.current.callId;
@@ -85,26 +92,85 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
     }
     if (!R.current.alive) return seconds;
     setCallSecs(seconds);
-    setEndNote(byMe ? 'Has terminado la llamada.' : 'La otra persona ha terminado la llamada.');
+    setEndNote(note ?? (byMe ? 'Has terminado la llamada.' : 'La otra persona ha terminado la llamada.'));
+    setByOther(!byMe);
     setPhase('ended');
     if (seconds >= RATE_MIN_SECONDS && R.current.partnerId) setRateOpen(true);
     return seconds;
+  };
+
+  const NET_MSG = 'No se pudo establecer la conexión de vídeo entre vuestras redes. Inténtalo de nuevo; si usáis datos móviles, prueba con wifi.';
+
+  /** La llamada solo pasa a «en directo» cuando de verdad llega imagen o sonido (antes: pantalla negra). */
+  const markLive = () => {
+    if (R.current.live || R.current.finished || !R.current.gotStream) return;
+    R.current.live = true;
+    setReconnecting(false);
+    setPhase('live');
+    every(() => setSecs((x) => x + 1), 1000);
+    openSignals();
+  };
+
+  const watchIce = (mc: MediaConnection, tries = 0) => {
+    const pc = mc.peerConnection;
+    if (!pc) { if (tries < 40) later(() => watchIce(mc, tries + 1), 100); return; }
+    const onIce = () => {
+      const st = pc.iceConnectionState;
+      if (st === 'connected' || st === 'completed') {
+        clearTimeout(R.current.recon); setReconnecting(false);
+        if (!R.current.hasVideo) markLive();
+        else later(markLive, 3000); // si el vídeo tarda en pintar, no esperar más de 3 s
+      } else if (st === 'disconnected') {
+        // Cortes breves de la red móvil: esperar a que se recupere en vez de colgar
+        if (R.current.live) {
+          setReconnecting(true);
+          clearTimeout(R.current.recon);
+          R.current.recon = window.setTimeout(() => {
+            if (pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') finish(false, 'La conexión con la otra persona se ha perdido.');
+          }, 15000);
+        }
+      } else if (st === 'failed') {
+        if (R.current.live) finish(false, 'La conexión con la otra persona se ha perdido.');
+        else fail(NET_MSG);
+      }
+    };
+    pc.addEventListener('iceconnectionstatechange', onIce);
+    onIce();
   };
 
   const attach = (mc: MediaConnection) => {
     R.current.mc = mc;
     setPhase('connecting');
     mc.on('stream', (remote: MediaStream) => {
-      // El sonido sale solo por <audio>; el <video> va silenciado (antes sonaba dos veces y causaba eco)
-      if (remoteA.current) { remoteA.current.srcObject = remote; remoteA.current.play().catch(() => setNeedsTap(true)); }
+      R.current.gotStream = true;
+      R.current.hasVideo = remote.getVideoTracks().length > 0;
+      // El sonido sale por un único <audio> ya desbloqueado: suena solo, sin tocar nada
+      playRemoteAudio(remote);
       if (remoteV.current) { remoteV.current.srcObject = remote; remoteV.current.play().catch(() => {}); }
-      setHasRemoteVideo(remote.getVideoTracks().length > 0);
-      if (!R.current.live) { R.current.live = true; setPhase('live'); every(() => setSecs((s) => s + 1), 1000); }
+      setHasRemoteVideo(R.current.hasVideo);
+      const st = mc.peerConnection?.iceConnectionState;
+      if (st === 'connected' || st === 'completed') { if (!R.current.hasVideo) markLive(); else later(markLive, 3000); }
     });
+    watchIce(mc);
     mc.on('close', () => finish(false));
-    mc.on('error', () => (R.current.live ? finish(false) : fail('Se perdió la conexión con la otra persona.')));
-    later(() => { if (!R.current.live && !R.current.finished) fail('No se pudo conectar con la otra persona. Puede ser su red: inténtalo de nuevo.'); }, 30000);
+    mc.on('error', () => (R.current.live ? finish(false, 'La conexión con la otra persona se ha perdido.') : fail(NET_MSG)));
+    later(() => { if (!R.current.live && !R.current.finished) fail(NET_MSG); }, 25000);
   };
+
+  /** Avisos entre los dos móviles: captura de pantalla (app Android) y salir de la app. */
+  const openSignals = () => {
+    const id = R.current.callId; if (!id || R.current.sig) return;
+    const ch = supabase.channel(`sig-${id}`, { config: { broadcast: { self: false } } })
+      .on('broadcast', { event: 'screenshot' }, () => {
+        setShotAlert(Date.now());
+        toast('⚠️ La otra persona ha intentado hacer una captura de pantalla', true);
+      })
+      .on('broadcast', { event: 'away' }, () => setPartnerAway(true))
+      .on('broadcast', { event: 'back' }, () => setPartnerAway(false))
+      .subscribe();
+    R.current.sig = ch;
+  };
+  const signal = (event: string) => { R.current.sig?.send({ type: 'broadcast', event, payload: {} }); };
 
   const watchEnd = (callId: string) => {
     const ch = supabase.channel(`call-end-${callId}`)
@@ -247,6 +313,17 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const onShot = () => { setShotAlert(Date.now()); signal('screenshot'); toast('Las capturas de pantalla no están permitidas en ZEVRA', true); };
+    const onVis = () => signal(document.visibilityState === 'hidden' ? 'away' : 'back');
+    window.addEventListener('zevra-screenshot', onShot);
+    document.addEventListener('visibilitychange', onVis);
+    return () => { window.removeEventListener('zevra-screenshot', onShot); document.removeEventListener('visibilitychange', onVis); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => { if (phase === 'live') remoteV.current?.play().catch(() => {}); }, [phase]);
+  useEffect(() => { if (!shotAlert) return; const t = setTimeout(() => setShotAlert(0), 6000); return () => clearTimeout(t); }, [shotAlert]);
+
   const attachLocal = () => {
     const v = localV.current, st = R.current.stream;
     if (v && st && v.srcObject !== st) { v.srcObject = st; v.play().catch(() => {}); }
@@ -324,10 +401,10 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
 
   // Si la otra persona se va, buscar a la siguiente automáticamente (como OmeTV)
   useEffect(() => {
-    if (phase !== 'ended' || !canNext || !autoNext || rateOpen || callSecs >= RATE_MIN_SECONDS || !endNote.startsWith('La otra')) return;
+    if (phase !== 'ended' || !canNext || !autoNext || rateOpen || callSecs >= RATE_MIN_SECONDS || !byOther) return;
     const t = setTimeout(onAgain, 1800);
     return () => clearTimeout(t);
-  }, [phase, canNext, autoNext, rateOpen, callSecs, endNote, onAgain]);
+  }, [phase, canNext, autoNext, rateOpen, callSecs, byOther, onAgain]);
 
   const showVideo = mode !== 'voice' && hasRemoteVideo;
   const inCall = phase === 'live' || phase === 'connecting';
@@ -335,33 +412,46 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
   const mainIsLocal = swapped && phase === 'live' && showVideo;
   const common = partner ? partner.interests.filter((x) => me.interests.includes(x)) : [];
   const touch = useRef<{ x: number; y: number } | null>(null);
+  const canSwipe = canNext && (phase === 'live' || phase === 'connecting');
+  const blurAll = shotAlert > 0;
 
   return (
-    <div className="full" style={{ background: phase === 'live' && showVideo ? '#000' : 'var(--g-night)' }}
-      onTouchStart={(e) => { touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
+    <div className="full call-stage" style={{ background: (phase === 'live' || phase === 'connecting') && showVideo ? '#000' : 'var(--g-night)' }}
+      onTouchStart={(e) => {
+        const tg = e.target as HTMLElement;
+        touch.current = tg.closest('input,textarea,.call-chat') ? null : { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }}
+      onTouchMove={(e) => {
+        const t0 = touch.current; if (!t0 || !canSwipe) return;
+        const dx = e.touches[0].clientX - t0.x, dy = e.touches[0].clientY - t0.y;
+        if (Math.abs(dx) > Math.abs(dy)) setSwipeDx(Math.min(0, dx));
+      }}
       onTouchEnd={(e) => {
-        const t0 = touch.current; touch.current = null;
-        if (!t0 || phase !== 'live' || !canNext || chatOpen) return;
+        const t0 = touch.current; touch.current = null; setSwipeDx(0);
+        if (!t0 || !canSwipe) return;
         const dx = e.changedTouches[0].clientX - t0.x, dy = e.changedTouches[0].clientY - t0.y;
-        if (dx < -90 && Math.abs(dy) < 60) next(); // deslizar a la izquierda = siguiente
-      }}>
-      <audio ref={remoteA} autoPlay playsInline />
+        if (dx < -70 && Math.abs(dy) < Math.abs(dx)) next(); // deslizar a la izquierda = siguiente persona
+      }}
+      onTouchCancel={() => { touch.current = null; setSwipeDx(0); }}>
+      {/* Mientras conecta: la foto de la otra persona, desenfocada */}
+      {phase === 'connecting' && partner && (
+        <div className="connect-bg" aria-hidden="true"><Avatar id={partner.id} path={partner.avatar_path} size={720} /></div>
+      )}
       <video ref={remoteV} autoPlay playsInline muted
-        className={`${mainIsLocal ? 'pip-video' : 'main-video'} ${hideRemote ? 'blur' : ''}`}
-        style={{ display: phase === 'live' && showVideo ? 'block' : 'none', objectFit: mainIsLocal ? 'cover' : fit }}
+        className={`${mainIsLocal ? 'pip-video' : 'main-video'} ${phase === 'live' ? 'reveal' : ''} ${hideRemote || partnerAway || blurAll ? 'blur' : ''}`}
+        style={{ display: (phase === 'live' || phase === 'connecting') && showVideo ? 'block' : 'none', opacity: phase === 'live' ? 1 : 0, objectFit: mainIsLocal ? 'cover' : fit, transform: swipeDx ? `translateX(${swipeDx}px)` : undefined }}
+        onLoadedData={markLive} onPlaying={markLive}
         onClick={() => mainIsLocal && setSwapped(false)} />
       <video ref={localV} autoPlay playsInline muted
-        className={mainIsLocal ? 'main-video' : 'pip-video'}
+        className={`${mainIsLocal ? 'main-video' : 'pip-video'} ${blurAll ? 'blur' : ''}`}
         style={{ display: showLocal && cam ? 'block' : 'none', objectFit: mainIsLocal ? fit : 'cover', transform: facing === 'user' ? 'scaleX(-1)' : undefined }}
         onClick={() => phase === 'live' && showVideo && setSwapped(!swapped)} />
       {showLocal && !cam && <div className="pip-video pip-off"><Icon n="videoOff" c="s" /><span>Cámara apagada</span></div>}
 
-      {phase === 'live' && needsTap && (
-        <button className="btn primary sm" style={{ position: 'absolute', top: '45%', left: '50%', transform: 'translateX(-50%)', zIndex: 9 }}
-          onClick={() => { remoteA.current?.play().then(() => setNeedsTap(false)).catch(() => {}); remoteV.current?.play().catch(() => {}); }}>
-          <Icon n="mic" c="s" /> Toca para activar el sonido
-        </button>
-      )}
+      {swipeDx < -20 && <div className="swipe-hint" style={{ opacity: Math.min(1, -swipeDx / 70) }}>Siguiente <Icon n="arrowR" c="s" /></div>}
+      {reconnecting && phase === 'live' && <div className="call-banner"><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Reconectando…</div>}
+      {partnerAway && phase === 'live' && <div className="call-banner">{partner?.alias ?? 'La otra persona'} ha salido de la app</div>}
+      {blurAll && phase === 'live' && <div className="call-banner warn">⚠️ Captura de pantalla detectada · vídeo oculto</div>}
       {heartFx > 0 && <div key={heartFx} className="heart-fx" aria-hidden="true">❤️</div>}
 
       {(phase === 'live' && !showVideo) && (
@@ -446,7 +536,7 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
           {partner && <Avatar id={partner.id} path={partner.avatar_path} size={84} />}
           <div className="h2">{partner ? `Llamada con ${partner.alias}` : 'Llamada terminada'}</div>
           <p className="muted small">{endNote}{callSecs > 0 && ` Duración: ${fmtDur(callSecs)}.`}</p>
-          {canNext && autoNext && callSecs < RATE_MIN_SECONDS && endNote.startsWith('La otra') && <p className="small" style={{ color: 'var(--coral-mid)', fontWeight: 700 }}>Buscando a la siguiente persona…</p>}
+          {canNext && autoNext && callSecs < RATE_MIN_SECONDS && byOther && <p className="small" style={{ color: 'var(--coral-mid)', fontWeight: 700 }}>Buscando a la siguiente persona…</p>}
           {partner && callSecs > 0 && callSecs < RATE_MIN_SECONDS && <p className="tiny muted">Las valoraciones de respeto solo están disponibles a partir de 4 minutos.</p>}
           {partner && <p className="notice" style={{ maxWidth: 340 }}><Icon n="chat" c="s" /><span>Ya podéis escribiros por chat cuando queráis.</span></p>}
           <div className="grid" style={{ width: '100%', marginTop: 10 }}>

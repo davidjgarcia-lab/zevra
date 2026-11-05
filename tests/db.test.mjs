@@ -17,7 +17,22 @@ grant execute on function storage.foldername(text) to authenticated;
 create publication supabase_realtime;
 `;
 await db.exec(stub);
-const schema = fs.readFileSync(new URL('../supabase/schema.sql', import.meta.url), 'utf8');
+await db.exec(`
+create schema if not exists extensions;
+create type extensions.http_header as (field text, value text);
+create type extensions.http_request as (method text, uri text, headers extensions.http_header[], content_type text, content text);
+create type extensions.http_response as (status int, content_type text, headers extensions.http_header[], content text);
+create function extensions.http_header(f text, v text) returns extensions.http_header language sql as $$ select row(f, v)::extensions.http_header $$;
+create table extensions.fake (n int); insert into extensions.fake values (0);
+create function extensions.http(r extensions.http_request) returns extensions.http_response language plpgsql as $$
+begin
+  update extensions.fake set n = n + 1;
+  if r.uri not like 'https://rtc.live.cloudflare.com/v1/turn/keys/KEY1/%' then return row(401, 'application/json', null, '{}')::extensions.http_response; end if;
+  return row(200, 'application/json', null, '{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478"]},{"urls":["turn:turn.cloudflare.com:3478?transport=udp"],"username":"u1","credential":"c1"}]}')::extensions.http_response;
+end $$;
+grant usage on schema extensions to authenticated;
+`);
+const schema = fs.readFileSync(new URL('../supabase/schema.sql', import.meta.url), 'utf8').replace(/create extension if not exists http with schema extensions;/g, '');
 try { await db.exec(schema); } catch (e) { console.log("SQL ERROR:", e.message, e.position, e.where); process.exit(1); }
 await db.exec(schema); // idempotente
 const upgrade = fs.readFileSync(new URL('../supabase/upgrade-02.sql', import.meta.url), 'utf8');
@@ -128,4 +143,25 @@ await expect('dani da me gusta (mutuo)', async()=>{ const r = await rows(D.dani,
 await expect('fer no ve likes ajenos', async()=>{ const r = await rows(D.fer, `select * from likes`); if (r.length) throw new Error('ve'); });
 await expect('tarjeta con género', async()=>{ const r = await rows(D.fer, `select gender from profile_cards where id=$1`, [D.eva]); if (r[0].gender !== 'mujer') throw new Error(JSON.stringify(r)); });
 await expect('no puede poner género inválido', ()=>as(D.fer, `update profiles set gender='otro' where id=$1`, [D.fer]), true);
+// ---- actualización 03: servidores TURN
+
+const up4 = fs.readFileSync(new URL('../supabase/upgrade-04.sql', import.meta.url), 'utf8');
+const up3 = fs.readFileSync(new URL('../supabase/upgrade-03.sql', import.meta.url), 'utf8').replace(/create extension if not exists http with schema extensions;/, '');
+try { await db.exec(up3); await db.exec(up3); await db.exec(up4); await db.exec(up4); } catch (e) { console.log('UPGRADE 03/04 ERROR:', e.message); process.exit(1); }
+await expect('fer no puede saber si eva y dani hablaron', async()=>{ const r = await rows(D.fer, `select have_connected($1,$2) as c`, [D.eva, D.dani]); if (r[0].c !== false) throw new Error('filtra'); });
+await expect('eva sí sabe que habló con dani', async()=>{ const r = await rows(D.eva, `select have_connected($1,$2) as c`, [D.eva, D.dani]); if (r[0].c !== true) throw new Error('no'); });
+await expect('fer no puede consultar bloqueos ajenos', async()=>{ const r = await rows(D.fer, `select is_blocked($1,$2) as c`, [U.ana, U.ben]); if (r[0].c !== false) throw new Error('filtra'); });
+await expect('chat sigue funcionando tras el cambio', ()=>as(D.eva, `insert into messages (recipient, kind, body) values ($1,'text','hola de nuevo')`, [D.dani]));
+await expect('bloqueo sigue aplicando', async()=>{ await as(D.eva, `insert into blocks (blocker, blocked) values ($1,$2)`, [D.eva, D.dani]); try { await as(D.dani, `insert into messages (recipient, kind, body) values ($1,'text','?')`, [D.eva]); throw new Error('pudo escribir'); } catch (e) { if (e.message === 'pudo escribir') throw e; } await as(D.eva, `delete from blocks where blocker=$1`, [D.eva]); });
+await expect('handle_new_user no ejecutable', ()=>as(D.eva, `select handle_new_user()`), true);
+await expect('sin configurar devuelve []', async()=>{ const r = await rows(D.eva, `select get_ice_servers() as s`); if (JSON.stringify(r[0].s) !== '[]') throw new Error(JSON.stringify(r)); });
+await expect('usuario no puede guardar credenciales', ()=>as(D.eva, `select set_turn_config('x','y')`), true);
+await expect('usuario no puede leer ajustes', ()=>as(D.eva, `select * from app_settings`), true);
+await db.query(`select set_turn_config('KEY1','TOKEN1')`);
+await expect('Cloudflare devuelve TURN', async()=>{ const r = await rows(D.eva, `select get_ice_servers() as s`); if (r[0].s.length !== 2 || r[0].s[1].username !== 'u1') throw new Error(JSON.stringify(r)); });
+await expect('usa la caché (no vuelve a llamar)', async()=>{ await rows(D.dani, `select get_ice_servers() as s`); const n = (await db.query('select n from extensions.fake')).rows[0].n; if (n !== 1) throw new Error('llamadas: ' + n); });
+await db.query(`select set_turn_config('MALA','X')`);
+await expect('clave mala no rompe (devuelve [])', async()=>{ const r = await rows(D.eva, `select get_ice_servers() as s`); if (!Array.isArray(r[0].s)) throw new Error(JSON.stringify(r)); });
+await db.query(`select set_static_ice('[{"urls":["turn:extra:3478"],"username":"a","credential":"b"}]')`);
+await expect('servidores fijos se añaden', async()=>{ const r = await rows(D.eva, `select get_ice_servers() as s`); if (!JSON.stringify(r[0].s).includes('turn:extra')) throw new Error(JSON.stringify(r)); });
 console.log(`\n${ok} OK, ${fail} FALLOS`); if (fail) process.exit(1);

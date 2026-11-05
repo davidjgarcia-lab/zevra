@@ -4,6 +4,9 @@ import { App as CapApp } from '@capacitor/app';
 import App from './App';
 import { isNative } from './lib/native';
 import { initInstallCapture } from './lib/install';
+import { initAudioUnlock } from './lib/rtc';
+
+initAudioUnlock();
 
 if (!isNative) initInstallCapture();
 import './styles.css';

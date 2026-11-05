@@ -1,19 +1,38 @@
 import type Peer from 'peerjs';
 import type { MediaConnection } from 'peerjs';
-import type { Mode } from './supabase';
+import { supabase, type Mode } from './supabase';
 
-const ICE: RTCIceServer[] = [
-  { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-  // TURN gratuito de Open Relay (mejora la conexión entre redes móviles). Sustitúyelo por uno propio en producción.
-  { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turns:openrelay.metered.ca:443?transport=tcp'], username: 'openrelayproject', credential: 'openrelayproject' },
+const STUN: RTCIceServer[] = [
+  { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] },
 ];
 
+/**
+ * Servidores ICE. Con datos móviles (4G/5G) los dos móviles casi nunca pueden verse directamente:
+ * hace falta un servidor TURN que haga de puente. Las credenciales las genera Supabase
+ * (función get_ice_servers, con Cloudflare TURN) y se guardan aquí unas horas.
+ */
+let iceCache: { at: number; servers: RTCIceServer[] } | null = null;
+export async function getIceServers(): Promise<RTCIceServer[]> {
+  if (iceCache && Date.now() - iceCache.at < 6 * 3600e3) return iceCache.servers;
+  try {
+    const { data, error } = await supabase.rpc('get_ice_servers');
+    const extra = !error && Array.isArray(data) ? (data as RTCIceServer[]) : [];
+    const servers = [...STUN, ...extra];
+    iceCache = { at: Date.now(), servers };
+    return servers;
+  } catch {
+    return STUN;
+  }
+}
+export const hasTurn = () => !!iceCache?.servers.some((s) => [s.urls].flat().some((u) => String(u).startsWith('turn')));
+
 function createPeer(): Promise<Peer> {
-  return import('peerjs').then(({ default: PeerCtor }) => new Promise<Peer>((resolve, reject) => {
+  return Promise.all([import('peerjs'), getIceServers()]).then(([{ default: PeerCtor }, ice]) => new Promise<Peer>((resolve, reject) => {
     // Servidor de señalización: PeerJS público por defecto, o uno propio con VITE_PEERJS_HOST
     const host = import.meta.env.VITE_PEERJS_HOST as string | undefined;
     const opts = host ? { host, port: Number(import.meta.env.VITE_PEERJS_PORT || 443), path: (import.meta.env.VITE_PEERJS_PATH as string) || '/', secure: import.meta.env.VITE_PEERJS_SECURE !== 'false' } : {};
-    const p = new PeerCtor({ ...opts, config: { iceServers: host ? [] : ICE }, debug: 0 });
+    const p = new PeerCtor({ ...opts, config: { iceServers: host ? [] : ice, iceCandidatePoolSize: 4 }, debug: 0 });
+    createdAt = Date.now();
     const t = setTimeout(() => { p.destroy(); reject(new Error('No se pudo conectar con el servicio de llamadas.')); }, 15000);
     p.on('open', () => { clearTimeout(t); resolve(p); });
     p.on('error', (e) => { clearTimeout(t); if (!p.open) reject(e); });
@@ -23,11 +42,14 @@ function createPeer(): Promise<Peer> {
 
 // Conexión con el servidor de señalización reutilizable entre llamadas: evita esperar 1-3 s cada vez.
 let cached: Promise<Peer> | null = null;
+let createdAt = 0;
 export async function openPeer(): Promise<Peer> {
   if (cached) {
     try {
       const p = await cached;
-      if (!p.destroyed && p.open) return p;
+      // Se renueva cada 6 h para que las credenciales TURN no caduquen en mitad de una llamada
+      if (!p.destroyed && p.open && Date.now() - createdAt < 6 * 3600e3) return p;
+      if (!p.destroyed) p.destroy();
     } catch { /* se crea otro */ }
   }
   cached = createPeer();
@@ -64,3 +86,41 @@ export async function getLocalStream(mode: Mode): Promise<MediaStream> {
 
 export function stopStream(s: MediaStream | null) { s?.getTracks().forEach((t) => t.stop()); }
 export type { MediaConnection };
+
+/* ---------- Audio de la otra persona ----------
+   Un único <audio> que se «desbloquea» con el primer toque del usuario en la app. Así, cuando llega la
+   llamada, el sonido suena solo (iPhone y algunos Android bloquean el audio que no sigue a un toque). */
+const SILENCE = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+let audioEl: HTMLAudioElement | null = null;
+export function remoteAudio(): HTMLAudioElement {
+  if (!audioEl) {
+    audioEl = document.createElement('audio');
+    audioEl.autoplay = true;
+    audioEl.setAttribute('playsinline', '');
+    audioEl.style.display = 'none';
+    document.body.appendChild(audioEl);
+  }
+  return audioEl;
+}
+let unlocked = false;
+export function initAudioUnlock() {
+  const unlock = () => {
+    if (unlocked) return;
+    const a = remoteAudio();
+    if (a.srcObject) { a.play().then(() => { unlocked = true; }).catch(() => {}); return; }
+    a.src = SILENCE;
+    a.play().then(() => { unlocked = true; a.pause(); a.removeAttribute('src'); a.load(); }).catch(() => {});
+  };
+  ['pointerdown', 'touchend', 'keydown'].forEach((ev) => document.addEventListener(ev, unlock, { capture: true, passive: true }));
+}
+/** Reproduce el audio remoto; si el navegador lo bloquea, lo reintenta en el siguiente toque, sin botones. */
+export function playRemoteAudio(stream: MediaStream) {
+  const a = remoteAudio();
+  a.srcObject = stream;
+  a.muted = false;
+  a.play().catch(() => {
+    const retry = () => { a.play().catch(() => {}); document.removeEventListener('pointerdown', retry, true); };
+    document.addEventListener('pointerdown', retry, true);
+  });
+}
+export function stopRemoteAudio() { const a = audioEl; if (a) { a.pause(); a.srcObject = null; } }

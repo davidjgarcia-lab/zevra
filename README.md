@@ -39,7 +39,18 @@ Funciona como **app web instalable** (Android e iPhone, desde el enlace de Netli
 2. **Deploys › Trigger deploy**. `netlify.toml` ya indica cómo compilar (`npm run build`, carpeta `dist`).
 3. Enlace para compartir: `https://TU-SITIO.netlify.app/instalar`
 
-### 4. GitHub Actions (APK de Android)
+### 4. Servidor TURN (imprescindible para llamadas con datos móviles)
+Con 4G/5G los móviles no pueden conectarse directamente y la imagen se queda en negro sin un servidor TURN.
+1. Crea una cuenta gratis en <https://dash.cloudflare.com> (1.000 GB/mes gratis).
+2. Menú **Realtime** (o **Calls**) › **TURN Server** › **Create** › nombre `zevra`.
+3. Copia el **Turn Token ID** y el **API Token**.
+4. En Supabase › SQL Editor ejecuta `supabase/upgrade-03.sql` (si no lo has hecho) y después:
+   ```sql
+   select public.set_turn_config('TURN_TOKEN_ID', 'API_TOKEN');
+   ```
+La clave queda guardada en la base de datos (nunca llega a los móviles); Supabase genera credenciales temporales para cada usuario.
+
+### 5. GitHub Actions (APK de Android)
 En **Settings › Secrets and variables › Actions** del repositorio, crea:
 `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` y `ANDROID_KEY_PASSWORD`.
 Con cada cambio en `main` se compila el APK y se publica en **Releases**, con un enlace fijo de descarga:
@@ -68,4 +79,5 @@ npm run android:sync     # copia la app al proyecto Android (abrir android/ con 
 ## Límites conocidos
 - **Verificación de edad:** se hace en el móvil y comprueba la autenticidad de los datos (dígitos de control), pero no es una verificación biométrica. Para cumplir normativa estricta, conecta un proveedor acreditado (Veriff, Didit, Onfido…) en `verify_age`.
 - **iPhone:** iOS no permite a ninguna app web bloquear capturas. Para bloquearlas habría que publicar una app nativa en la App Store (cuenta de desarrollador de Apple, 99 €/año).
-- **Llamadas:** usan el servidor gratuito de PeerJS y un TURN público. Para muchos usuarios conviene un TURN propio (p. ej. Twilio o Metered) en `src/lib/rtc.ts`.
+- **Llamadas:** la señalización usa el servidor gratuito de PeerJS; el vídeo necesita el TURN de Cloudflare (paso 4).
+- **Capturas en iPhone y navegadores:** no se pueden bloquear ni detectar desde la web. En la app de Android se bloquean y, en Android 14+, se avisa a la otra persona del intento.
