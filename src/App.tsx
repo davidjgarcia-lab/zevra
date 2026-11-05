@@ -10,6 +10,7 @@ import { Auth, NewPassword } from './screens/Auth';
 import { Home } from './screens/Home';
 import { InstallButton } from './screens/Install';
 import { closePeer, warmUp } from './lib/rtc';
+import { detectCountry } from './lib/catalog';
 
 // Carga diferida: cada pantalla se descarga solo cuando se usa (arranque más rápido)
 const Verify = lazy(() => import('./screens/Verify').then((m) => ({ default: m.Verify })));
@@ -26,6 +27,12 @@ const EditProfile = lazy(() => loadProfile().then((m) => ({ default: m.EditProfi
 const MyProfile = lazy(() => loadProfile().then((m) => ({ default: m.MyProfile })));
 const Settings = lazy(() => loadProfile().then((m) => ({ default: m.Settings })));
 const UserProfile = lazy(() => loadProfile().then((m) => ({ default: m.UserProfile })));
+const Connect = lazy(() => import('./screens/Connect').then((m) => ({ default: m.Connect })));
+const Shop = lazy(() => import('./screens/Shop').then((m) => ({ default: m.Shop })));
+const loadShowroom = () => import('./screens/Showroom');
+const Showroom = lazy(() => loadShowroom().then((m) => ({ default: m.Showroom })));
+const Broadcast = lazy(() => loadShowroom().then((m) => ({ default: m.Broadcast })));
+const WatchLive = lazy(() => loadShowroom().then((m) => ({ default: m.WatchLive })));
 
 export default function App() {
   return <ToastProvider><Root /></ToastProvider>;
@@ -138,6 +145,11 @@ function Main({ session, me, refreshMe }: { session: Session; me: ProfileCard; r
   useEffect(() => {
     refreshUnread(); refreshRequests();
     supabase.rpc('close_stale_calls').then(() => {});
+    // Presencia (para «personas conectadas») cada 4 minutos mientras la app está abierta
+    const touch = () => { if (document.visibilityState === 'visible') supabase.rpc('touch_presence').then(() => {}); };
+    touch();
+    const presence = window.setInterval(touch, 240000);
+    document.addEventListener('visibilitychange', touch);
     const ch = supabase.channel(`inbox-${myId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `recipient=eq.${myId}` }, () => refreshUnread())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'photo_access', filter: `owner=eq.${myId}` }, () => refreshRequests())
@@ -156,8 +168,15 @@ function Main({ session, me, refreshMe }: { session: Session; me: ProfileCard; r
     // Android: volver atrás con el botón del sistema
     const onPop = () => back();
     window.addEventListener('zevra-back', onPop);
-    return () => { supabase.removeChannel(ch); window.removeEventListener('zevra-back', onPop); };
+    return () => { supabase.removeChannel(ch); window.removeEventListener('zevra-back', onPop); clearInterval(presence); document.removeEventListener('visibilitychange', touch); };
   }, [myId, refreshUnread, refreshRequests, back]);
+
+  // País sugerido la primera vez (por IP; si falla, idioma y zona horaria). Se puede cambiar en el perfil.
+  useEffect(() => {
+    if (me.country) return;
+    detectCountry().then((c) => { if (c) supabase.from('profiles').update({ country: c }).eq('id', myId).then(() => refreshMe()); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Caducar el aviso de llamada si nadie contesta
   useEffect(() => { if (!invite) return; const t = setTimeout(() => setInvite(null), 60000); return () => clearTimeout(t); }, [invite]);
@@ -175,15 +194,20 @@ function Main({ session, me, refreshMe }: { session: Session; me: ProfileCard; r
     case 'edit': screen = <EditProfile />; break;
     case 'settings': screen = <Settings />; break;
     case 'history': screen = <History />; break;
+    case 'shop': screen = <Shop />; break;
+    case 'live': screen = <WatchLive key={route.id} id={route.id} />; break;
+    case 'broadcast': screen = <Broadcast />; break;
     default: screen = (
       <>
         {tab !== 'profile' && <header className="topbar"><div className="title"><Logo /></div>
           <InstallButton />
           <button className="icon-btn" onClick={() => go({ name: 'tabs', tab: 'profile' })} aria-label={`Solicitudes de fotos${requests ? `, ${requests} pendientes` : ''}`}><Icon n="bell" />{requests > 0 && <span className="badge">{requests}</span>}</button>
           <button className="icon-btn" onClick={() => go({ name: 'settings' })} aria-label="Ajustes"><Icon n="settings" /></button></header>}
-        <main className="scroll">{tab === 'home' ? <Home /> : tab === 'chats' ? <Chats /> : <MyProfile />}</main>
+        {tab === 'connect' ? <Connect /> : (
+          <main className="scroll">{tab === 'home' ? <Home /> : tab === 'showroom' ? <Showroom /> : tab === 'chats' ? <Chats /> : <MyProfile />}</main>
+        )}
         <nav className="nav" aria-label="Navegación principal">
-          {([['home', 'home', 'Inicio', 0], ['chats', 'chat', 'Chat', unread], ['profile', 'user', 'Perfil', requests]] as const).map(([k, i, l, b]) => (
+          {([['home', 'home', 'Inicio', 0], ['connect', 'shuffle', 'Conectar', 0], ['showroom', 'sparkles', 'Showroom', 0], ['chats', 'chat', 'Mensajes', unread], ['profile', 'user', 'Perfil', requests]] as const).map(([k, i, l, b]) => (
             <button key={k} className={tab === k ? 'on' : ''} aria-current={tab === k ? 'page' : undefined} onClick={() => go({ name: 'tabs', tab: k })}>
               <Icon n={i} /><span>{l}</span>{b > 0 && <span className="badge">{b}</span>}
             </button>

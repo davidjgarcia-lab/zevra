@@ -60,6 +60,17 @@ Con cada cambio en `main` se compila el APK y se publica en **Releases**, con un
 
 ---
 
+## Tienda (códigos de descuento)
+Las ofertas se gestionan en la tabla `shop_offers` (Supabase › Table Editor o SQL Editor):
+```sql
+insert into public.shop_offers (brand, title, description, discount, code, url, category, expires_at)
+values ('Nombre de la marca', '20 % en toda la tienda', 'Envío discreto', '-20 %', 'ZEVRA20', 'https://marca.com', 'Juguetes', '2026-12-31');
+```
+Para ocultar una oferta: `update public.shop_offers set active = false where code = 'ZEVRA20';`
+
+## Showroom (directos)
+Quien activa «Aparecer en el Showroom» en su perfil puede emitir en directo. Cada espectador se conecta directamente con quien emite, así que el límite es de **8 espectadores a la vez** (`MAX_VIEWERS` en `src/screens/Showroom.tsx`). Para cientos de espectadores habría que pasar a un servidor de difusión (Cloudflare Realtime SFU).
+
 ## Desarrollo
 ```bash
 npm install

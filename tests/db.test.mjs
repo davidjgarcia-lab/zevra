@@ -27,7 +27,7 @@ create table extensions.fake (n int); insert into extensions.fake values (0);
 create function extensions.http(r extensions.http_request) returns extensions.http_response language plpgsql as $$
 begin
   update extensions.fake set n = n + 1;
-  if r.uri not like 'https://rtc.live.cloudflare.com/v1/turn/keys/KEY1/%' then return row(401, 'application/json', null, '{}')::extensions.http_response; end if;
+  if r.uri not like 'https://rtc.live.cloudflare.com/v1/turn/keys/' || repeat('a', 32) || '/%' then return row(401, 'application/json', null, '{}')::extensions.http_response; end if;
   return row(200, 'application/json', null, '{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478"]},{"urls":["turn:turn.cloudflare.com:3478?transport=udp"],"username":"u1","credential":"c1"}]}')::extensions.http_response;
 end $$;
 grant usage on schema extensions to authenticated;
@@ -142,7 +142,7 @@ await expect('eva da me gusta (no mutuo)', async()=>{ const r = await rows(D.eva
 await expect('dani da me gusta (mutuo)', async()=>{ const r = await rows(D.dani, `select like_user($1) as m`, [D.eva]); if (r[0].m !== true) throw new Error('no mutuo'); });
 await expect('fer no ve likes ajenos', async()=>{ const r = await rows(D.fer, `select * from likes`); if (r.length) throw new Error('ve'); });
 await expect('tarjeta con género', async()=>{ const r = await rows(D.fer, `select gender from profile_cards where id=$1`, [D.eva]); if (r[0].gender !== 'mujer') throw new Error(JSON.stringify(r)); });
-await expect('no puede poner género inválido', ()=>as(D.fer, `update profiles set gender='otro' where id=$1`, [D.fer]), true);
+await expect('no puede poner género inválido', ()=>as(D.fer, `update profiles set gender='inventado' where id=$1`, [D.fer]), true);
 // ---- actualización 03: servidores TURN
 
 const up4 = fs.readFileSync(new URL('../supabase/upgrade-04.sql', import.meta.url), 'utf8');
@@ -157,11 +157,55 @@ await expect('handle_new_user no ejecutable', ()=>as(D.eva, `select handle_new_u
 await expect('sin configurar devuelve []', async()=>{ const r = await rows(D.eva, `select get_ice_servers() as s`); if (JSON.stringify(r[0].s) !== '[]') throw new Error(JSON.stringify(r)); });
 await expect('usuario no puede guardar credenciales', ()=>as(D.eva, `select set_turn_config('x','y')`), true);
 await expect('usuario no puede leer ajustes', ()=>as(D.eva, `select * from app_settings`), true);
-await db.query(`select set_turn_config('KEY1','TOKEN1')`);
+await db.query(`select set_turn_config('N' || repeat('a', 32), ' ' || repeat('b', 64) || ' ')`);
 await expect('Cloudflare devuelve TURN', async()=>{ const r = await rows(D.eva, `select get_ice_servers() as s`); if (r[0].s.length !== 2 || r[0].s[1].username !== 'u1') throw new Error(JSON.stringify(r)); });
 await expect('usa la caché (no vuelve a llamar)', async()=>{ await rows(D.dani, `select get_ice_servers() as s`); const n = (await db.query('select n from extensions.fake')).rows[0].n; if (n !== 1) throw new Error('llamadas: ' + n); });
-await db.query(`select set_turn_config('MALA','X')`);
+await db.query(`select set_turn_config(repeat('c', 32), repeat('d', 64))`);
+await expect('ID inválido se rechaza', ()=>db.query(`select set_turn_config('MALA','X')`), true);
 await expect('clave mala no rompe (devuelve [])', async()=>{ const r = await rows(D.eva, `select get_ice_servers() as s`); if (!Array.isArray(r[0].s)) throw new Error(JSON.stringify(r)); });
 await db.query(`select set_static_ice('[{"urls":["turn:extra:3478"],"username":"a","credential":"b"}]')`);
 await expect('servidores fijos se añaden', async()=>{ const r = await rows(D.eva, `select get_ice_servers() as s`); if (!JSON.stringify(r[0].s).includes('turn:extra')) throw new Error(JSON.stringify(r)); });
+// ---- actualización 05: país, deseos, filtros, tienda y Showroom
+const up5 = fs.readFileSync(new URL('../supabase/upgrade-05.sql', import.meta.url), 'utf8');
+try { await db.exec(up5); await db.exec(up5); } catch (e) { console.log('UPGRADE 05 ERROR:', e.message); process.exit(1); }
+const G = {};
+for (const n of ['gala','hugo','iris']) { const r = await db.query(`insert into auth.users (raw_user_meta_data) values ($1) returning id`, [JSON.stringify({alias: n})]); G[n] = r.rows[0].id; }
+await as(G.gala, `select verify_age('1995-01-01','2031-01-01',$1)`, ['g'.repeat(64)]);
+await as(G.hugo, `select verify_age('1990-01-01','2031-01-01',$1)`, ['h'.repeat(64)]);
+await as(G.iris, `select verify_age('1960-01-01','2031-01-01',$1)`, ['i'.repeat(64)]);
+await expect('perfil con país y deseos', ()=>as(G.gala, `update profiles set gender='genero_fluido', country='ES', desires='{Coqueteo,BDSM}', f_country='ES' where id=$1`, [G.gala]));
+await expect('género nuevo válido', ()=>as(G.hugo, `update profiles set gender='pareja_hm', country='MX', desires='{BDSM}' where id=$1`, [G.hugo]));
+await expect('país inválido', ()=>as(G.hugo, `update profiles set country='Mexico' where id=$1`, [G.hugo]), true);
+await expect('gala (solo España) no encaja con hugo (México)', async()=>{ const r = await rows(G.gala, `select prefs_match($1,$2) as m`, [G.gala, G.hugo]); if (r[0].m !== false) throw new Error(JSON.stringify(r)); });
+await as(G.gala, `update profiles set f_country=null where id=$1`, [G.gala]);
+await expect('sin filtro de país sí encajan', async()=>{ const r = await rows(G.gala, `select prefs_match($1,$2) as m`, [G.gala, G.hugo]); if (r[0].m !== true) throw new Error(JSON.stringify(r)); });
+await as(G.gala, `update profiles set f_age_max=40 where id=$1`, [G.gala]);
+await expect('filtro de edad excluye a iris (66)', async()=>{ const r = await rows(G.gala, `select prefs_match($1,$2) as m`, [G.gala, G.iris]); if (r[0].m !== false) throw new Error(JSON.stringify(r)); });
+await as(G.gala, `update profiles set f_age_max=99, f_desires='{Tántrico}' where id=$1`, [G.gala]);
+await expect('filtro de deseos sin coincidencia', async()=>{ const r = await rows(G.gala, `select prefs_match($1,$2) as m`, [G.gala, G.hugo]); if (r[0].m !== false) throw new Error(JSON.stringify(r)); });
+await as(G.gala, `update profiles set f_desires='{BDSM}' where id=$1`, [G.gala]);
+await expect('filtro de deseos con coincidencia', async()=>{ const r = await rows(G.gala, `select prefs_match($1,$2) as m`, [G.gala, G.hugo]); if (r[0].m !== true) throw new Error(JSON.stringify(r)); });
+await expect('tarjeta con país y deseos', async()=>{ const r = await rows(G.iris, `select country, desires, online from profile_cards where id=$1`, [G.gala]); if (r[0].country !== 'ES' || !r[0].desires.includes('BDSM')) throw new Error(JSON.stringify(r)); });
+await expect('presencia', ()=>as(G.gala, `select touch_presence()`));
+await expect('no puede falsear last_seen', ()=>as(G.gala, `update profiles set last_seen_at=now() where id=$1`, [G.gala]), true);
+await expect('estadísticas 12 h', async()=>{ const r = await rows(G.iris, `select stats_12h() as s`); if (r[0].s.online_12h < 1) throw new Error(JSON.stringify(r)); });
+// tienda
+await db.query(`insert into shop_offers (brand, title, code, url) values ('Marca', 'Oferta', 'ZEVRA10', 'https://ejemplo.com'), ('Vieja', 'Caducada', 'X', null)`);
+await db.query(`update shop_offers set expires_at = '2000-01-01' where brand='Vieja'`);
+await expect('tienda: solo ofertas activas', async()=>{ const r = await rows(G.hugo, `select brand from shop_offers`); if (r.length !== 1) throw new Error(JSON.stringify(r)); });
+await expect('tienda: usuario no puede crear ofertas', ()=>as(G.hugo, `insert into shop_offers (brand, title) values ('x','y')`), true);
+// Showroom
+await expect('emitir sin activar Showroom', ()=>as(G.gala, `select start_live('Hola','peer-g')`), true);
+await as(G.gala, `update profiles set showroom=true where id=$1`, [G.gala]);
+const lv = await expect('gala emite en directo', ()=>as(G.gala, `select start_live('Hola a todos','peer-g') as id`));
+const liveId = lv.rows[0].id;
+await expect('hugo ve el directo en la lista', async()=>{ const r = await rows(G.hugo, `select id from lives where ended_at is null`); if (!r.some(x=>x.id===liveId)) throw new Error('no'); });
+await expect('hugo entra al directo', async()=>{ const r = await rows(G.hugo, `select join_live($1) as j`, [liveId]); if (r[0].j.peer_id !== 'peer-g') throw new Error(JSON.stringify(r)); });
+await expect('hugo puede escribir a gala tras ver su directo', ()=>as(G.hugo, `insert into messages (recipient, kind, body) values ($1,'text','¡Gran directo!')`, [G.gala]));
+await expect('gala ve la conversación', async()=>{ const r = await rows(G.gala, `select alias from my_conversations()`); if (!r.some(x=>x.alias==='hugo')) throw new Error(JSON.stringify(r)); });
+await expect('iris no puede escribir a gala (no lo ha visto)', ()=>as(G.iris, `insert into messages (recipient, kind, body) values ($1,'text','hey')`, [G.gala]), true);
+await expect('hugo no puede terminar el directo de gala', async()=>{ await as(G.hugo, `select end_live($1)`, [liveId]); const r = await db.query(`select ended_at from lives where id=$1`, [liveId]); if (r.rows[0].ended_at) throw new Error('terminado'); });
+await expect('gala termina el directo', ()=>as(G.gala, `select end_live($1)`, [liveId]));
+await expect('directo terminado no admite espectadores', ()=>as(G.iris, `select join_live($1)`, [liveId]), true);
+await expect('bloqueado no ve directos', async()=>{ await as(G.gala, `update profiles set showroom=true where id=$1`, [G.gala]); const l2 = await rows(G.gala, `select start_live('2','p2') as id`); await as(G.gala, `insert into blocks (blocker, blocked) values ($1,$2)`, [G.gala, G.iris]); const r = await rows(G.iris, `select id from lives where id=$1`, [l2[0].id]); if (r.length) throw new Error('lo ve'); });
 console.log(`\n${ok} OK, ${fail} FALLOS`); if (fail) process.exit(1);

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { errText, GENDERS, supabase, type CallRow, type Gender, type Mode } from '../lib/supabase';
-import { MODES, ls, useApp } from '../store';
-import { warmUp } from '../lib/rtc';
+import { supabase, type CallRow } from '../lib/supabase';
+import { FACTS } from '../lib/facts';
+import { MODES, useApp } from '../store';
 import { InstallBanner } from './Install';
-import { Avatar, Check, Icon, Sheet, fmtDur, timeAgo, useToast } from '../ui';
+import { Avatar, Icon, fmtDur, timeAgo } from '../ui';
 import { RateSheet } from './Sheets';
 
 export function useMyCalls(limit = 30) {
@@ -16,113 +16,99 @@ export function useMyCalls(limit = 30) {
   return { calls, reload: load };
 }
 
-const CONSENTS: Record<Exclude<Mode, 'social'>, string[]> = {
-  voice: ['Entiendo que nadie puede pedirme que encienda la cámara.', 'Puedo colgar en cualquier momento sin dar explicaciones.'],
-  intimate: [
-    'Soy mayor de edad y quiero ver y mostrar contenido íntimo con otras personas adultas.',
-    'Puedo apagar mi cámara, difuminar su imagen o pasar a la siguiente persona en cualquier momento.',
-    'Nunca grabaré ni compartiré a nadie. Sé que hacerlo es delito y supone la expulsión.',
-  ],
-};
-
-/** Personas conectadas ahora mismo (como el contador de OmeTV), con presencia en tiempo real. */
-function useOnline(myId: string) {
-  const [n, setN] = useState(0);
+export interface Stats { online_12h: number; online_now: number; social: number; voice: number; intimate: number; lives: number }
+/** Personas conectadas (datos reales de la base de datos), se refresca cada minuto. */
+export function useStats() {
+  const [stats, setStats] = useState<Stats | null>(null);
   useEffect(() => {
-    const ch = supabase.channel('zevra-online', { config: { presence: { key: myId } } });
-    ch.on('presence', { event: 'sync' }, () => setN(Object.keys(ch.presenceState()).length))
-      .subscribe((st) => { if (st === 'SUBSCRIBED') ch.track({ at: Date.now() }); });
-    return () => { supabase.removeChannel(ch); };
-  }, [myId]);
-  return n;
+    let on = true;
+    const load = () => supabase.rpc('stats_12h').then(({ data }) => {
+      const d = data as Partial<Stats> | null;
+      if (on && d && typeof d.online_12h === 'number') {
+        setStats({ online_12h: d.online_12h, online_now: d.online_now ?? 0, social: d.social ?? 0, voice: d.voice ?? 0, intimate: d.intimate ?? 0, lives: d.lives ?? 0 });
+      }
+    }, () => {});
+    load(); const t = setInterval(load, 60000);
+    return () => { on = false; clearInterval(t); };
+  }, []);
+  return stats;
+}
+const fmtN = (n: number | undefined) => (n ?? 0).toLocaleString('es-ES');
+
+function FactCard() {
+  const [i, setI] = useState(() => Math.floor(Math.random() * FACTS.length));
+  const [anim, setAnim] = useState(0);
+  const f = FACTS[i];
+  const nextFact = () => { setI((x) => (x + 1 + Math.floor(Math.random() * (FACTS.length - 1))) % FACTS.length); setAnim(Date.now()); };
+  return (
+    <div className="fact-card">
+      <div className="between">
+        <span className="fact-pill"><Icon n="bulb" c="s" /> ¿Sabías que…?</span>
+        <button className="icon-btn" onClick={nextFact} aria-label="Otro dato curioso"><Icon n="refresh" c="s" /></button>
+      </div>
+      <div key={anim} className="fade">
+        <h2 className="h2" style={{ margin: '10px 0 6px' }}>{f.title}</h2>
+        <p className="small" style={{ color: 'rgba(246,240,235,.86)' }}>{f.text}</p>
+        <p className="tiny" style={{ marginTop: 10, color: 'rgba(246,240,235,.6)' }}>
+          Fuente: {f.url ? <a className="link" style={{ color: 'inherit', textDecoration: 'underline' }} href={f.url} target="_blank" rel="noopener">{f.source} ↗</a> : f.source}
+        </p>
+      </div>
+    </div>
+  );
 }
 
-function Preferences() {
-  const { me, refreshMe } = useApp();
-  const toast = useToast();
-  const [gender, setGender] = useState<Gender | null>(me.gender ?? null);
-  const [seeking, setSeeking] = useState<Gender[]>(me.seeking ?? []);
-  const save = async (g: Gender | null, s: Gender[]) => {
-    setGender(g); setSeeking(s);
-    const { error } = await supabase.from('profiles').update({ gender: g, seeking: s }).eq('id', me.id);
-    if (error) toast(errText(error), true); else refreshMe();
-  };
-  const toggle = (g: Gender) => save(gender, seeking.includes(g) ? seeking.filter((x) => x !== g) : [...seeking, g]);
+export function ShopCard({ compact }: { compact?: boolean }) {
+  const { go } = useApp();
   return (
-    <>
-      <div className="section-title"><span className="h3">Quiero conocer a</span><span className="tiny muted">{seeking.length ? 'Filtro activo' : 'Todo el mundo'}</span></div>
-      <div className="chips">
-        <button className={`chip ${seeking.length === 0 ? 'on' : ''}`} aria-pressed={seeking.length === 0} onClick={() => save(gender, [])}>Todos</button>
-        {GENDERS.map(([k, , plural]) => <button key={k} className={`chip ${seeking.includes(k) ? 'on' : ''}`} aria-pressed={seeking.includes(k)} onClick={() => toggle(k)}>{plural}</button>)}
-      </div>
-      {!gender && (
-        <div className="notice" style={{ marginTop: 10, flexDirection: 'column', gap: 8 }}>
-          <span><b>¿Cómo te identificas?</b> Lo usamos para respetar los filtros de los demás.</span>
-          <div className="chips">{GENDERS.map(([k, label]) => <button key={k} className="chip" onClick={() => save(k, seeking)}>{label}</button>)}</div>
-        </div>
-      )}
-    </>
+    <button className={`shop-card ${compact ? 'compact' : ''}`} onClick={() => go({ name: 'shop' })}>
+      <span className="shop-ic"><Icon n="bag" /></span>
+      <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+        <b>Tienda</b>
+        <span>Bienestar íntimo con códigos exclusivos para ZEVRA</span>
+      </span>
+      <Icon n="arrowR" />
+    </button>
   );
 }
 
 export function Home() {
-  const { me, startCall, go } = useApp();
-  const online = useOnline(me.id);
-  const [mode, setMode] = useState<Mode | null>(null);
-  const [consentFor, setConsentFor] = useState<Exclude<Mode, 'social'> | null>(null);
-  const [checks, setChecks] = useState<boolean[]>([]);
+  const { me, go } = useApp();
+  const stats = useStats();
   const [rate, setRate] = useState<CallRow | null>(null);
   const { calls, reload } = useMyCalls(10);
   const pending = (calls ?? []).filter((c) => c.can_rate);
-  const hour = new Date().getHours();
-  const hello = hour < 6 ? 'Buenas noches' : hour < 14 ? 'Buenos días' : hour < 21 ? 'Buenas tardes' : 'Buenas noches';
-
-  const start = () => {
-    if (!mode) return;
-    if (mode !== 'social' && ls.get(`zevra-consent-${me.id}-${mode}`) !== '1') { setChecks(CONSENTS[mode].map(() => false)); setConsentFor(mode); return; }
-    startCall({ kind: 'match', mode });
-  };
 
   return (
     <div className="pad fade" style={{ paddingBottom: 24 }}>
-      <div className="between" style={{ marginTop: 8 }}>
-        <div className="label muted">{hello}, {me.alias}</div>
-        {online > 0 && <span className="tiny" style={{ color: 'var(--ok)', fontWeight: 800 }}>● {online} {online === 1 ? 'persona conectada' : 'personas conectadas'}</span>}
-      </div>
+      <div className="small muted" style={{ marginTop: 4 }}>Hola, <b style={{ color: 'var(--cream)' }}>{me.alias}</b></div>
+      <h1 className="h1" style={{ margin: '4px 0 14px' }}>Gente real. <span style={{ color: 'var(--coral)' }}>Conexiones reales.</span></h1>
       <InstallBanner />
-      <h1 className="h1" style={{ margin: '6px 0 16px' }}>¿Cómo te apetece <span className="serif">conectar</span> hoy?</h1>
 
       {pending.length > 0 && (
-        <button className="notice" style={{ width: '100%', marginBottom: 14 }} onClick={() => setRate(pending[0])}>
+        <button className="notice" style={{ width: '100%', margin: '10px 0' }} onClick={() => setRate(pending[0])}>
           <Icon n="star" c="s" /><span><b>Valora a {pending[0].alias}</b> · ¿fue una persona respetuosa?{pending.length > 1 ? ` (+${pending.length - 1})` : ''}</span>
         </button>
       )}
 
-      <div role="radiogroup" aria-label="Modalidad" className="grid">
-        {(Object.keys(MODES) as Mode[]).map((id) => {
-          const m = MODES[id], sel = mode === id;
-          return (
-            <button key={id} className={`mode ${sel ? 'sel' : ''}`} role="radio" aria-checked={sel} onClick={() => { setMode(id); warmUp(); }}
-              style={{ borderColor: sel ? m.color : 'transparent', color: m.text, background: id === 'intimate' && sel ? 'linear-gradient(135deg,rgba(255,59,107,.16),rgba(122,77,255,.1)),var(--graphite)' : undefined }}>
-              <div className="row" style={{ alignItems: 'flex-start' }}>
-                <span className="ic" style={{ background: `${m.color}22`, color: m.text }}><Icon n={m.icon} /></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="label" style={{ fontSize: 10.5 }}>{m.n} · {m.name}{id !== 'social' && <span style={{ opacity: 0.8 }}> · consentimiento</span>}</div>
-                  <div className="h3" style={{ color: 'var(--cream)', marginTop: 2 }}>{m.title}</div>
-                  <div className="small muted" style={{ marginTop: 2 }}>{m.desc}</div>
-                </div>
-                <span className="radio" />
-              </div>
-            </button>
-          );
-        })}
-      </div>
-      <button className="btn primary" style={{ marginTop: 16 }} disabled={!mode} onClick={start}>
-        {mode ? <>Empezar en {MODES[mode].name} <Icon n="arrowR" c="s" /></> : 'Elige una modalidad'}
-      </button>
-      <div className="row small muted" style={{ justifyContent: 'center', marginTop: 10, gap: 6 }}><Icon n="shield" c="s" /> Denunciar y bloquear, siempre a mano en la llamada</div>
+      <FactCard />
 
-      <Preferences />
+      <div className="stats-card">
+        <div className="label" style={{ color: 'var(--coral-mid)', fontSize: 10.5 }}><span className="live-dot" /> En las últimas 12 horas</div>
+        <div className="stats-big">{stats ? fmtN(stats.online_12h) : '—'}</div>
+        <div className="small muted">{stats && stats.online_12h === 1 ? 'persona se ha conectado a ZEVRA' : 'personas se han conectado a ZEVRA'}{stats && stats.online_now > 0 ? ` · ${fmtN(stats.online_now)} ahora` : ''}</div>
+        <div className="stats-grid">
+          {(['social', 'voice', 'intimate'] as const).map((m) => (
+            <button key={m} className="stats-cell" onClick={() => go({ name: 'tabs', tab: 'connect' })}>
+              <Icon n={MODES[m].icon} c="s" />
+              <b>{stats ? fmtN(stats[m]) : '—'}</b>
+              <span>{MODES[m].title}</span>
+            </button>
+          ))}
+        </div>
+        <button className="btn primary" style={{ marginTop: 14 }} onClick={() => go({ name: 'tabs', tab: 'connect' })}><Icon n="shuffle" c="s" /> Conectar ahora</button>
+      </div>
+
+      <ShopCard />
 
       <div className="section-title"><span className="h3">Recientes</span><button className="tiny link" onClick={() => go({ name: 'history' })}>Ver historial</button></div>
       {calls === null ? <div className="skel" style={{ height: 140 }} /> : calls.length === 0 ? (
@@ -131,20 +117,6 @@ export function Home() {
         <div className="card" style={{ padding: '4px 12px' }}>
           {calls.slice(0, 4).map((c) => <CallItem key={c.call_id} c={c} onRate={() => setRate(c)} />)}
         </div>
-      )}
-
-      {consentFor && (
-        <Sheet onClose={() => setConsentFor(null)} label="Consentimiento">
-          <div className="label" style={{ color: MODES[consentFor].text }}>{MODES[consentFor].n} · {MODES[consentFor].name}</div>
-          <h2 className="h2" style={{ margin: '6px 0 14px' }}>Antes de empezar, confirma que…</h2>
-          <div className="grid" style={{ gap: 8 }}>
-            {CONSENTS[consentFor].map((t, i) => <Check key={i} on={checks[i]} onChange={(v) => setChecks(checks.map((c, j) => (j === i ? v : c)))}>{t}</Check>)}
-          </div>
-          <p className="tiny muted" style={{ margin: '10px 0 14px' }}>Puedes retirar este consentimiento en Ajustes.</p>
-          <button className="btn primary" disabled={!checks.every(Boolean)} onClick={() => {
-            ls.set(`zevra-consent-${me.id}-${consentFor}`, '1'); const m = consentFor; setConsentFor(null); startCall({ kind: 'match', mode: m });
-          }}>Doy mi consentimiento</button>
-        </Sheet>
       )}
       {rate && <RateSheet callId={rate.call_id} partner={rate.partner} alias={rate.alias} onClose={() => { setRate(null); reload(); }} />}
     </div>

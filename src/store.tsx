@@ -2,14 +2,17 @@ import { createContext, useContext } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import type { Mode, ProfileCard } from './lib/supabase';
 
-export type Tab = 'home' | 'chats' | 'profile';
+export type Tab = 'home' | 'connect' | 'showroom' | 'chats' | 'profile';
 export type Route =
   | { name: 'tabs'; tab: Tab }
   | { name: 'chat'; partner: string }
   | { name: 'user'; id: string }
   | { name: 'edit' }
   | { name: 'settings' }
-  | { name: 'history' };
+  | { name: 'history' }
+  | { name: 'shop' }
+  | { name: 'live'; id: string }
+  | { name: 'broadcast' };
 
 export type CallFlow =
   | { kind: 'match'; mode: Mode }
@@ -36,10 +39,10 @@ export function useApp(): AppCtx {
   return c;
 }
 
-export const MODES: Record<Mode, { n: string; name: string; title: string; desc: string; color: string; text: string; icon: string }> = {
-  social: { n: '01', name: 'Social', title: 'Vídeo para conocer gente', desc: 'Conversaciones abiertas, cara a cara. Sin contenido íntimo.', color: '#C9C2BC', text: '#F6F0EB', icon: 'video' },
-  voice: { n: '02', name: 'Voz', title: 'Solo voz, la mente primero', desc: 'Sin cámara. Conversaciones largas y cercanas.', color: '#7A4DFF', text: '#B9A4FF', icon: 'mic' },
-  intimate: { n: '03', name: 'Íntima', title: 'Vídeo íntimo, con permiso', desc: 'Vídeo para adultos que lo desean. Puedes difuminar la imagen o apagar tu cámara cuando quieras.', color: '#FF3B6B', text: '#FF86A4', icon: 'heart' },
+export const MODES: Record<Mode, { n: string; name: string; title: string; desc: string; color: string; text: string; icon: string; tags: string[] }> = {
+  social: { n: '01', name: 'Conocer gente', title: 'Conocer gente', desc: 'Charla cara a cara con alguien nuevo. Sin desnudos ni conductas sexuales: aquí se viene a conocer gente.', color: '#C9C2BC', text: '#F6F0EB', icon: 'users', tags: ['Vídeo', 'Social'] },
+  voice: { n: '02', name: 'Sexting por voz', title: 'Sexting por voz', desc: 'Solo voz, sin imagen ni vídeo. Una conversación íntima entre adultos que han elegido estar aquí.', color: '#7A4DFF', text: '#B9A4FF', icon: 'wave', tags: ['Solo audio', '+18 íntimo'] },
+  intimate: { n: '03', name: 'Explorar en vídeo', title: 'Explorar en vídeo', desc: 'Videollamadas íntimas entre adultos que han aceptado participar. Tú decides cuándo te ven y puedes salir al instante.', color: '#FF3B6B', text: '#FF86A4', icon: 'video', tags: ['Vídeo', '+18 íntimo'] },
 };
 
 export const REPORT_REASONS = [

@@ -6,6 +6,7 @@ import { getLocalStream, openPeer, playRemoteAudio, stopRemoteAudio, stopStream,
 import { MODES, ls, useApp, type CallFlow } from '../store';
 import { Avatar, Icon, Stars, ZMark, fmtClock, fmtDur, useToast } from '../ui';
 import { RATE_MIN_SECONDS } from '../config';
+import { countryName, flag } from '../lib/catalog';
 import { RateSheet, ReportSheet } from './Sheets';
 
 type Phase = 'prep' | 'searching' | 'ringing' | 'connecting' | 'live' | 'ended' | 'error';
@@ -481,6 +482,7 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
       {phase === 'live' && partner && (
         <div className="partner-tag">
           <span style={{ fontSize: 15, fontWeight: 800 }}>{partner.alias}{partner.age ? `, ${partner.age}` : ''} {partner.verified && <span style={{ color: 'var(--ok)' }}>✓</span>}{matched && ' 💘'}</span>
+          {partner.country && <span className="tiny" style={{ fontWeight: 700 }}>{flag(partner.country)} {countryName(partner.country)}</span>}
           {partner.respect_count > 0 && <span className="row tiny" style={{ gap: 4 }}><Stars value={Number(partner.respect_score)} /> {Number(partner.respect_score).toFixed(1)}</span>}
           {common.length > 0 && <span className="tiny" style={{ color: 'var(--coral-mid)' }}>En común: {common.slice(0, 3).join(', ')}</span>}
         </div>
@@ -510,7 +512,7 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
           </div>
           <div>
             <div className="h2" aria-live="polite">
-              {phase === 'prep' ? 'Preparando cámara y micrófono…' : phase === 'searching' ? 'Buscando a alguien…' : phase === 'ringing' ? `Llamando a ${partner?.alias ?? '…'}` : `Conectando${partner ? ` con ${partner.alias}` : '…'}`}
+              {phase === 'prep' ? 'Preparando cámara y micrófono…' : phase === 'searching' ? 'Buscando a alguien…' : phase === 'ringing' ? `Llamando a ${partner?.alias ?? '…'}` : `Conectando${partner ? ` con ${partner.alias}${partner.country ? ' ' + flag(partner.country) : ''}` : '…'}`}
             </div>
             <p className="muted small" style={{ marginTop: 6 }}>
               {phase === 'searching' ? 'Solo tú ves tu cámara mientras buscamos.' : phase === 'ringing' ? 'Esperando a que conteste.' : ''}

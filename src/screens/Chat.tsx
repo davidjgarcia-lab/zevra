@@ -34,7 +34,7 @@ export function Chats() {
 
   return (
     <div className="pad fade" style={{ paddingBottom: 24 }}>
-      <h1 className="h1" style={{ margin: '8px 0 6px' }}>Chat</h1>
+      <h1 className="h1" style={{ margin: '8px 0 6px' }}>Mensajes</h1>
       <p className="small muted" style={{ marginBottom: 14 }}>Solo con personas con las que ya has conectado.</p>
       {items === null ? <div className="grid">{[0, 1, 2].map((i) => <div key={i} className="skel" style={{ height: 64 }} />)}</div>
         : items.length === 0 ? (

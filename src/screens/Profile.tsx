@@ -6,6 +6,8 @@ import { isNative } from '../lib/native';
 import { INTERESTS, ls, useApp } from '../store';
 import { Avatar, Icon, Sheet, Spinner, Stars, Stripes, Toggle, timeAgo, useToast } from '../ui';
 import { ConfirmSheet, ReportSheet } from './Sheets';
+import { FiltersSheet, useFilters } from './Connect';
+import { COUNTRIES, DESIRE_GROUPS, GENDER_LIST, SEXUALITIES, countryName, flag, genderLabel } from '../lib/catalog';
 import { InstallButton } from './Install';
 
 /* ---------------- Foto con URL firmada ---------------- */
@@ -53,12 +55,73 @@ function RespectCard({ card, mine }: { card: ProfileCard; mine?: boolean }) {
   );
 }
 
+
+function ProfileBlock({ title, onEdit, children }: { title: string; onEdit?: () => void; children: React.ReactNode }) {
+  return (
+    <section className="pblock">
+      <div className="between" style={{ marginBottom: 10 }}><span className="label muted" style={{ fontSize: 10.5 }}>{title}</span>{onEdit && <button className="tiny link" onClick={onEdit}>Editar</button>}</div>
+      {children}
+    </section>
+  );
+}
+function InfoRow({ k, v }: { k: string; v: string }) {
+  return <div className="list-row between" style={{ minHeight: 44, padding: '8px 0' }}><span className="small muted">{k}</span><b className="small" style={{ textAlign: 'right' }}>{v}</b></div>;
+}
+
+/** Preferencias de búsqueda (las mismas que los filtros de Conectar). */
+function PrefsSection() {
+  const [filters, setFilters] = useFilters();
+  const [sheet, setSheet] = useState<null | 'desires' | 'country' | 'age' | 'genders'>(null);
+  if (!filters) return <div className="skel" style={{ height: 200 }} />;
+  const g = filters.seeking.map((k) => genderLabel(k)).filter(Boolean);
+  return (
+    <>
+      <ProfileBlock title="A quién quiero conocer" onEdit={() => setSheet('genders')}>
+        {g.length ? <div className="chips">{g.map((x) => <span key={x} className="chip">{x}</span>)}</div> : <p className="small">Todo el mundo</p>}
+      </ProfileBlock>
+      <ProfileBlock title="País" onEdit={() => setSheet('country')}>
+        <p className="small">{filters.f_country ? `${flag(filters.f_country)} ${countryName(filters.f_country)}` : '🌍 Todo el mundo'}</p>
+      </ProfileBlock>
+      <ProfileBlock title="Edad" onEdit={() => setSheet('age')}>
+        <p className="small">De {filters.f_age_min} a {filters.f_age_max === 99 ? '99+' : filters.f_age_max} años</p>
+      </ProfileBlock>
+      <ProfileBlock title="Deseos que busco" onEdit={() => setSheet('desires')}>
+        {filters.f_desires.length ? <div className="chips">{filters.f_desires.map((x) => <span key={x} className="chip on">{x}</span>)}</div> : <p className="small">Sin filtro de deseos</p>}
+      </ProfileBlock>
+      <p className="tiny muted">Estas preferencias se usan al conectar: solo te emparejamos con personas que encajan con las tuyas y tú con las suyas.</p>
+      {sheet && <FiltersSheet initial={filters} tab={sheet} onClose={() => setSheet(null)} onSaved={(f) => { setFilters(f); setSheet(null); }} />}
+    </>
+  );
+}
+
+function PrivacySection() {
+  const { me, refreshMe } = useApp();
+  const toast = useToast();
+  const set = async (patch: Record<string, unknown>, msg: string) => {
+    const { error } = await supabase.from('profiles').update(patch).eq('id', me.id);
+    if (error) return toast(errText(error), true);
+    await refreshMe(); toast(msg);
+  };
+  return (
+    <>
+      <ProfileBlock title="Privacidad">
+        <div className="list-row between"><span><b className="small">Aparecer en el Showroom</b><span className="tiny muted" style={{ display: 'block' }}>Tu perfil se muestra en el escaparate y puedes emitir en directo</span></span>
+          <Toggle on={!!me.showroom} onChange={(v) => set({ showroom: v }, v ? 'Ya apareces en el Showroom' : 'Ya no apareces en el Showroom')} label="Aparecer en el Showroom" /></div>
+        <div className="list-row between"><span className="small">Fecha de nacimiento y DNI</span><span className="tiny" style={{ color: 'var(--ok)' }}>Nunca se muestran</span></div>
+        <div className="list-row between"><span className="small">Fotos privadas</span><span className="tiny muted">Solo con tu permiso</span></div>
+      </ProfileBlock>
+      <p className="tiny muted">En la app de Android las capturas de pantalla están bloqueadas.</p>
+    </>
+  );
+}
+
 /* ===================== Mi perfil ===================== */
 export function MyProfile() {
   const { me, session, go, refreshMe, refreshRequests } = useApp();
   const myId = session.user.id;
   const toast = useToast();
   const [tab, setTab] = useState<'public' | 'private' | 'requests'>('public');
+  const [section, setSection] = useState<'about' | 'identity' | 'prefs' | 'photos' | 'privacy'>('about');
   const [photos, setPhotos] = useState<Photo[] | null>(null);
   const [reqs, setReqs] = useState<Array<{ viewer: string; status: string; created_at: string; alias?: string; avatar_path?: string | null }>>([]);
   const [view, setView] = useState<Photo | null>(null);
@@ -147,22 +210,61 @@ export function MyProfile() {
             <button className="icon-btn" style={{ background: 'var(--graphite)' }} onClick={() => go({ name: 'settings' })} aria-label="Ajustes"><Icon n="settings" c="s" /></button>
           </div>
         </div>
-        <div className="row" style={{ marginTop: 10, gap: 8 }}>
-          <h1 className="h2">{me.alias}{me.age ? `, ${me.age}` : ''}</h1>
-          {me.pronouns && <span className="tiny muted">{me.pronouns}</span>}
-          {me.verified && <span style={{ color: 'var(--ok)' }} title="Edad verificada con DNI"><Icon n="badgeCheck" c="s" label="Edad verificada con DNI" /></span>}
+        <div className="row" style={{ marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
+          <h1 className="h1" style={{ fontSize: 26 }}>{me.alias}{me.age ? `, ${me.age}` : ''}</h1>
+          {me.country && <span className="small" title={countryName(me.country)}>{flag(me.country)} {countryName(me.country)}</span>}
         </div>
-        {me.bio ? <p className="small" style={{ marginTop: 6 }}>{me.bio}</p> : <button className="small link" style={{ marginTop: 6 }} onClick={() => go({ name: 'edit' })}>Añade una bio</button>}
-        {me.interests.length > 0 && <div className="chips" style={{ marginTop: 10 }}>{me.interests.map((x) => <span key={x} className="chip">{x}</span>)}</div>}
-
-        <RespectCard card={me} mine />
-        <div className="row" style={{ gap: 8, marginTop: 10 }}>
-          <div className="stat"><b>{me.connections}</b><span className="tiny muted">Conexiones</span></div>
-          <div className="stat"><b>{(photos ?? []).filter((p) => !p.is_private).length}</b><span className="tiny muted">Públicas</span></div>
-          <div className="stat"><b>{(photos ?? []).filter((p) => p.is_private).length}</b><span className="tiny muted">Privadas</span></div>
+        <div className="chips" style={{ marginTop: 8 }}>
+          {me.verified && <span className="badge-pill ok"><Icon n="badgeCheck" c="s" /> Edad verificada</span>}
+          {me.verified && <span className="badge-pill blue"><Icon n="shieldCheck" c="s" /> Perfil verificado</span>}
+          {me.showroom && <span className="badge-pill coral"><Icon n="sparkles" c="s" /> En el Showroom</span>}
+          {me.created_at && <span className="badge-pill"><Icon n="clock" c="s" /> Desde {new Date(me.created_at).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}</span>}
         </div>
 
-        <div className="tabs" role="tablist" style={{ margin: '18px 0 12px' }}>
+        <div className="stats3">
+          <div><b>{me.connections}</b><span>Conexiones</span></div>
+          <div><b>{me.likes_received ?? 0}</b><span>Me gusta</span></div>
+          <div><b>{me.respect_count ? Number(me.respect_score).toFixed(1).replace('.', ',') : '—'}</b><span>Respeto</span></div>
+        </div>
+
+        <div className="seg-tabs" role="tablist">
+          {([['about', 'Sobre mí'], ['identity', 'Identidad'], ['prefs', 'Preferencias'], ['photos', `Fotos${pending.length ? ` · ${pending.length}` : ''}`], ['privacy', 'Privacidad']] as const).map(([k, l]) => (
+            <button key={k} role="tab" aria-selected={section === k} className={section === k ? 'on' : ''} onClick={() => setSection(k)}>{l}</button>
+          ))}
+        </div>
+
+        {section === 'about' && (
+          <>
+            <ProfileBlock title="Biografía" onEdit={() => go({ name: 'edit' })}>
+              {me.bio ? <p className="small">{me.bio}</p> : <p className="small muted">Aún no has escrito nada. Es opcional: tú decides qué compartes.</p>}
+            </ProfileBlock>
+            <ProfileBlock title="Gustos e intereses" onEdit={() => go({ name: 'edit' })}>
+              {me.interests.length ? <div className="chips">{me.interests.map((x) => <span key={x} className="chip">{x}</span>)}</div> : <p className="small muted">Añade tus intereses para encontrar afinidades.</p>}
+            </ProfileBlock>
+            <ProfileBlock title="Deseos" onEdit={() => go({ name: 'edit' })}>
+              {me.desires?.length ? <div className="chips">{me.desires.map((x) => <span key={x} className="chip on">{x}</span>)}</div> : <p className="small muted">Cuenta qué buscas: amistad, citas, juego de rol, poliamor…</p>}
+            </ProfileBlock>
+            <RespectCard card={me} mine />
+          </>
+        )}
+
+        {section === 'identity' && (
+          <ProfileBlock title="Identidad" onEdit={() => go({ name: 'edit' })}>
+            <InfoRow k="Me identifico como" v={genderLabel(me.gender) || '—'} />
+            <InfoRow k="Orientación" v={me.sexuality || '—'} />
+            <InfoRow k="Pronombres" v={me.pronouns || '—'} />
+            <InfoRow k="País" v={me.country ? `${flag(me.country)} ${countryName(me.country)}` : '—'} />
+            <InfoRow k="Edad" v={me.age ? `${me.age} años · verificada con DNI` : '—'} />
+          </ProfileBlock>
+        )}
+
+        {section === 'prefs' && <PrefsSection />}
+
+        {section === 'privacy' && <PrivacySection />}
+
+        {section === 'photos' && (
+          <>
+        <div className="tabs" role="tablist" style={{ margin: '4px 0 12px' }}>
           <button role="tab" aria-selected={tab === 'public'} className={tab === 'public' ? 'on' : ''} onClick={() => setTab('public')}>Públicas</button>
           <button role="tab" aria-selected={tab === 'private'} className={tab === 'private' ? 'on' : ''} onClick={() => setTab('private')}>Privadas</button>
           <button role="tab" aria-selected={tab === 'requests'} className={tab === 'requests' ? 'on' : ''} onClick={() => setTab('requests')}>Solicitudes{pending.length ? ` (${pending.length})` : ''}</button>
@@ -201,6 +303,8 @@ export function MyProfile() {
                 ))}
               </div>
             )}
+          </>
+        )}
           </>
         )}
         <button className="btn ghost" style={{ marginTop: 18 }} onClick={() => go({ name: 'user', id: myId })}><Icon n="eye" c="s" /> Ver mi perfil como lo ven los demás</button>
@@ -261,15 +365,41 @@ export function UserProfile({ id }: { id: string }) {
       </header>
       <main className="scroll"><div className="pad fade" style={{ paddingBottom: 30 }}>
         <div className="row" style={{ gap: 14, marginTop: 6 }}>
-          <Avatar id={card.id} path={card.avatar_path} size={84} />
+          <span style={{ position: 'relative', display: 'inline-flex' }}><Avatar id={card.id} path={card.avatar_path} size={88} />{card.online && <span className="online-dot big" title="En línea" />}</span>
           <div style={{ minWidth: 0 }}>
-            <div className="row" style={{ gap: 6 }}><h1 className="h2">{card.alias}{card.age ? `, ${card.age}` : ''}</h1>{card.verified && <span style={{ color: 'var(--ok)' }}><Icon n="badgeCheck" c="s" label="Edad verificada con DNI" /></span>}</div>
-            {card.pronouns && <div className="tiny muted">{card.pronouns}</div>}
-            <div className="tiny muted" style={{ marginTop: 2 }}>{card.connections} conexiones</div>
+            <h1 className="h2">{card.alias}{card.age ? `, ${card.age}` : ''}</h1>
+            {card.country && <div className="small" style={{ marginTop: 2 }}>{flag(card.country)} {countryName(card.country)}</div>}
+            <div className="tiny muted" style={{ marginTop: 2 }}>{card.online ? <span style={{ color: 'var(--ok)', fontWeight: 800 }}>● En línea</span> : `${card.connections} conexiones`}</div>
           </div>
         </div>
-        {card.bio && <p className="small" style={{ marginTop: 12 }}>{card.bio}</p>}
-        {card.interests.length > 0 && <div className="chips" style={{ marginTop: 10 }}>{card.interests.map((x) => <span key={x} className="chip">{x}</span>)}</div>}
+        <div className="chips" style={{ marginTop: 10 }}>
+          {card.verified && <span className="badge-pill ok"><Icon n="badgeCheck" c="s" /> Edad verificada</span>}
+          {card.verified && <span className="badge-pill blue"><Icon n="shieldCheck" c="s" /> Perfil verificado</span>}
+          {card.showroom && <span className="badge-pill coral"><Icon n="sparkles" c="s" /> Showroom</span>}
+        </div>
+        <div className="stats3">
+          <div><b>{card.connections}</b><span>Conexiones</span></div>
+          <div><b>{card.likes_received ?? 0}</b><span>Me gusta</span></div>
+          <div><b>{card.respect_count ? Number(card.respect_score).toFixed(1).replace('.', ',') : '—'}</b><span>Respeto</span></div>
+        </div>
+        {card.bio && <ProfileBlock title="Sobre mí"><p className="small">{card.bio}</p></ProfileBlock>}
+        {(card.gender || card.sexuality || card.pronouns) && (
+          <ProfileBlock title="Identidad">
+            {card.gender && <InfoRow k="Se identifica como" v={genderLabel(card.gender)} />}
+            {card.sexuality && <InfoRow k="Orientación" v={card.sexuality} />}
+            {card.pronouns && <InfoRow k="Pronombres" v={card.pronouns} />}
+          </ProfileBlock>
+        )}
+        {card.interests.length > 0 && (
+          <ProfileBlock title="Gustos e intereses">
+            <div className="chips">{card.interests.map((x) => <span key={x} className={`chip ${!own && me.interests.includes(x) ? 'on' : ''}`}>{x}</span>)}</div>
+          </ProfileBlock>
+        )}
+        {card.desires && card.desires.length > 0 && (
+          <ProfileBlock title={!own && (me.desires ?? []).some((d) => card.desires!.includes(d)) ? 'Deseos · tenéis cosas en común' : 'Deseos'}>
+            <div className="chips">{card.desires.map((x) => <span key={x} className={`chip ${!own && (me.desires ?? []).includes(x) ? 'on' : ''}`}>{x}</span>)}</div>
+          </ProfileBlock>
+        )}
         <RespectCard card={card} />
         {!own && connected && (
           <div className="row" style={{ gap: 8, marginTop: 12 }}>
@@ -309,14 +439,21 @@ export function EditProfile() {
   const [bio, setBio] = useState(me.bio);
   const [pronouns, setPronouns] = useState(me.pronouns);
   const [gender, setGender] = useState<string>(me.gender ?? '');
+  const [sexuality, setSexuality] = useState<string>(me.sexuality ?? '');
+  const [country, setCountry] = useState<string>(me.country ?? '');
   const [interests, setInterests] = useState<string[]>(me.interests);
+  const [desires, setDesires] = useState<string[]>(me.desires ?? []);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const toggle = (arr: string[], v: string, max: number) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v].slice(0, max));
   const save = async (e: FormEvent) => {
     e.preventDefault();
     if (alias.trim().length < 2) return setErr('El alias debe tener al menos 2 caracteres.');
     setBusy(true);
-    const { error } = await supabase.from('profiles').update({ alias: alias.trim(), bio: bio.trim(), pronouns, interests, gender: gender || null }).eq('id', session.user.id);
+    const { error } = await supabase.from('profiles').update({
+      alias: alias.trim(), bio: bio.trim(), pronouns, interests, gender: gender || null,
+      sexuality: sexuality || null, country: country || null, desires,
+    }).eq('id', session.user.id);
     setBusy(false);
     if (error) return setErr(errText(error));
     await refreshMe(); toast('Perfil guardado'); back();
@@ -325,23 +462,43 @@ export function EditProfile() {
     <>
       <header className="topbar"><button className="icon-btn" style={{ marginLeft: -8 }} onClick={back} aria-label="Volver"><Icon n="arrowL" /></button><div className="title">Editar perfil</div></header>
       <main className="scroll"><form className="pad fade" onSubmit={save} style={{ paddingBottom: 30 }}>
+        <div className="label muted" style={{ margin: '4px 0 10px' }}>Sobre mí</div>
         <label className="field"><span>Alias</span><input className="input" value={alias} onChange={(e) => setAlias(e.target.value)} maxLength={20} /></label>
+        <label className="field"><span>Biografía · {bio.length}/160</span><textarea className="input" value={bio} onChange={(e) => setBio(e.target.value)} maxLength={160} placeholder="Cuéntales algo de ti" /></label>
+        <div className="field"><span>Gustos e intereses (hasta 8)</span>
+          <div className="chips">{INTERESTS.map((x) => <button type="button" key={x} className={`chip ${interests.includes(x) ? 'on' : ''}`} aria-pressed={interests.includes(x)} onClick={() => setInterests(toggle(interests, x, 8))}>{x}</button>)}</div></div>
+
+        <div className="label muted" style={{ margin: '20px 0 10px' }}>Identidad</div>
         <label className="field"><span>Me identifico como</span>
           <select className="input" value={gender} onChange={(e) => setGender(e.target.value)}>
-            <option value="">Prefiero no decirlo</option><option value="mujer">Mujer</option><option value="hombre">Hombre</option><option value="no_binario">No binario</option>
+            <option value="">Prefiero no decirlo</option>
+            {GENDER_LIST.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select></label>
+        <label className="field"><span>Orientación</span>
+          <select className="input" value={sexuality} onChange={(e) => setSexuality(e.target.value)}>
+            <option value="">Prefiero no decirlo</option>
+            {SEXUALITIES.map((x) => <option key={x} value={x}>{x}</option>)}
           </select></label>
         <label className="field"><span>Pronombres</span>
           <select className="input" value={pronouns} onChange={(e) => setPronouns(e.target.value)}>
-            {['', 'ella', 'él', 'elle'].map((p) => <option key={p} value={p}>{p || 'Prefiero no decirlo'}</option>)}
+            {['', 'ella', 'él', 'elle', 'ella/elle', 'él/elle'].map((p) => <option key={p} value={p}>{p || 'Prefiero no decirlo'}</option>)}
           </select></label>
-        <label className="field"><span>Bio · {bio.length}/160</span><textarea className="input" value={bio} onChange={(e) => setBio(e.target.value)} maxLength={160} /></label>
-        <div className="field"><span>Intereses</span>
-          <div className="chips">{INTERESTS.map((x) => {
-            const on = interests.includes(x);
-            return <button type="button" key={x} className={`chip ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => setInterests(on ? interests.filter((i) => i !== x) : [...interests, x].slice(0, 8))}>{x}</button>;
-          })}</div></div>
-        {err && <p className="err">{err}</p>}
-        <button className="btn primary" disabled={busy}>Guardar cambios</button>
+        <label className="field"><span>País</span>
+          <select className="input" value={country} onChange={(e) => setCountry(e.target.value)}>
+            <option value="">Sin indicar</option>
+            {COUNTRIES.map(([c, n]) => <option key={c} value={c}>{flag(c)} {n}</option>)}
+          </select></label>
+
+        <div className="label muted" style={{ margin: '20px 0 4px' }}>Deseos (hasta 12)</div>
+        <p className="tiny muted" style={{ marginBottom: 6 }}>Se muestran en tu perfil y sirven para que los filtros de los demás te encuentren.</p>
+        {DESIRE_GROUPS.map((g) => (
+          <div key={g.title} style={{ marginTop: 12 }}>
+            <div className="small" style={{ fontWeight: 800, marginBottom: 8 }}>{g.title}</div>
+            <div className="chips">{g.items.map((d) => <button type="button" key={d} className={`chip ${desires.includes(d) ? 'on' : ''}`} aria-pressed={desires.includes(d)} onClick={() => setDesires(toggle(desires, d, 12))}>{d}</button>)}</div>
+          </div>
+        ))}
+        {err && <p className="err" style={{ marginTop: 14 }}>{err}</p>}
+        <button className="btn primary" style={{ marginTop: 20, position: 'sticky', bottom: 10 }} disabled={busy}>Guardar cambios</button>
       </form></main>
     </>
   );
