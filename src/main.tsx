@@ -5,8 +5,11 @@ import App from './App';
 import { isNative } from './lib/native';
 import { initInstallCapture } from './lib/install';
 import { initAudioUnlock } from './lib/rtc';
+import { goBackStep } from './lib/back';
+import { initShotReporter } from './lib/shots';
 
 initAudioUnlock();
+initShotReporter();
 
 if (!isNative) initInstallCapture();
 import './styles.css';
@@ -33,9 +36,8 @@ if (!isNative) hideNetlifyOverlays();
 
 if (isNative) {
   // Botón «atrás» de Android: navegar dentro de la app en vez de cerrarla
-  CapApp.addListener('backButton', ({ canGoBack }) => {
-    window.dispatchEvent(new Event('zevra-back'));
-    if (!canGoBack) { /* la app decide; no salir de golpe */ }
+  CapApp.addListener('backButton', () => {
+    if (!goBackStep()) CapApp.minimizeApp().catch(() => {});
   });
 } else if ('serviceWorker' in navigator && location.protocol === 'https:') {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));

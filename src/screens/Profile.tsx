@@ -1,65 +1,133 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { errText, forgetPhotoUrl, photoUrl, supabase, type Photo, type ProfileCard } from '../lib/supabase';
-import { compressImage, uid } from '../lib/media';
-import { Watermark } from '../lib/protect';
+import { compressImage, MAX_VIDEO_MB, uid, videoExt } from '../lib/media';
+import { useBackHandler } from '../lib/back';
+import { useShotContext } from '../lib/shots';
 import { isNative } from '../lib/native';
 import { INTERESTS, ls, useApp } from '../store';
-import { Avatar, Icon, Sheet, Spinner, Stars, Stripes, Toggle, timeAgo, useToast } from '../ui';
+import { Avatar, Icon, Sheet, Spinner, Stars, Stripes, Toggle, ZLoader, timeAgo, useToast } from '../ui';
 import { ConfirmSheet, ReportSheet } from './Sheets';
 import { FiltersSheet, useFilters } from './Connect';
 import { COUNTRIES, DESIRE_GROUPS, GENDER_LIST, SEXUALITIES, countryName, flag, genderLabel } from '../lib/catalog';
 import { InstallButton } from './Install';
 
-/* ---------------- Foto con URL firmada ---------------- */
+/* ---------------- Foto o vídeo con URL firmada ---------------- */
 function PhotoTile({ photo, onOpen, locked }: { photo?: Photo; onOpen?: () => void; locked?: boolean }) {
   const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => { let on = true; if (photo && !locked) photoUrl(photo.path).then((u) => on && setUrl(u)); return () => { on = false; }; }, [photo, locked]);
+  useEffect(() => { let on = true; setUrl(null); if (photo && !locked) photoUrl(photo.path).then((u) => on && setUrl(u)); return () => { on = false; }; }, [photo, locked]);
+  const isVideo = photo?.kind === 'video';
   return (
-    <button className="photo" onClick={onOpen} aria-label={locked ? 'Foto privada bloqueada' : 'Ver foto'}>
-      {locked ? <span className="lock"><Icon n="lock" /> Privada</span> : url ? <img src={url} alt="" /> : <span className="skel" style={{ position: 'absolute', inset: 0 }} />}
+    <button className="photo" onClick={onOpen} aria-label={locked ? (isVideo ? 'Vídeo privado bloqueado' : 'Foto privada bloqueada') : isVideo ? 'Ver vídeo' : 'Ver foto'}>
+      {locked ? <span className="lock"><Icon n={isVideo ? 'film' : 'lock'} /> {isVideo ? 'Vídeo privado' : 'Privada'}</span>
+        : url ? (isVideo ? <video src={`${url}#t=0.5`} muted playsInline preload="metadata" /> : <img src={url} alt="" />)
+        : <span className="skel" style={{ position: 'absolute', inset: 0 }} />}
+      {isVideo && !locked && <span className="play-badge" aria-hidden="true"><Icon n="film" c="s" /></span>}
       {photo?.is_private && !locked && <span className="tag"><Icon n="lock" c="s" /> Privada</span>}
     </button>
   );
 }
 
-function PhotoViewer({ photo, watermark, onClose, onDelete }: { photo: Photo; watermark: string; onClose: () => void; onDelete?: () => void }) {
+/** Visor de fotos y vídeos del perfil (sin marca de agua). */
+function PhotoViewer({ photo, onClose, onDelete }: { photo: Photo; onClose: () => void; onDelete?: () => void }) {
+  const { me } = useApp();
+  useShotContext(photo.owner !== me.id ? photo.owner : null, 'photo');
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => { photoUrl(photo.path).then(setUrl); }, [photo.path]);
+  useBackHandler(onClose);
   return (
-    <div className="viewer" role="dialog" aria-label="Foto">
-      {url ? <img src={url} alt="" /> : <Spinner />}
-      <Watermark text={watermark} />
+    <div className="viewer" role="dialog" aria-label={photo.kind === 'video' ? 'Vídeo' : 'Foto'}>
+      {!url ? <Spinner /> : photo.kind === 'video'
+        ? <video src={url} controls autoPlay playsInline controlsList="nodownload" disablePictureInPicture style={{ pointerEvents: 'auto' }} />
+        : <img src={url} alt="" />}
       <div className="row" style={{ position: 'absolute', top: 'calc(10px + var(--st))', right: 10, zIndex: 8, gap: 8 }}>
-        {onDelete && <button className="icon-btn" style={{ background: 'rgba(14,14,16,.6)' }} onClick={onDelete} aria-label="Eliminar foto"><Icon n="trash" /></button>}
+        {onDelete && <button className="icon-btn" style={{ background: 'rgba(14,14,16,.6)' }} onClick={onDelete} aria-label="Eliminar"><Icon n="trash" /></button>}
         <button className="icon-btn" style={{ background: 'rgba(14,14,16,.6)' }} onClick={onClose} aria-label="Cerrar"><Icon n="x" /></button>
       </div>
     </div>
   );
 }
 
-function RespectCard({ card, mine }: { card: ProfileCard; mine?: boolean }) {
-  const has = card.respect_count > 0;
+/** Portada del perfil: foto elegida por la persona o, si no hay, el degradado de ZEVRA. */
+function Cover({ path, seed, children }: { path?: string | null; seed: number; children?: React.ReactNode }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => { let on = true; setUrl(null); photoUrl(path).then((u) => on && setUrl(u)); return () => { on = false; }; }, [path]);
   return (
-    <div className="card" style={{ marginTop: 14, display: 'flex', gap: 14, alignItems: 'center' }}>
-      <div style={{ width: 64, height: 64, borderRadius: 16, background: 'rgba(255,196,107,.1)', color: 'var(--warn)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
-        <b style={{ fontSize: 22, lineHeight: 1 }}>{has ? Number(card.respect_score).toFixed(1).replace('.', ',') : '—'}</b>
-        <span className="tiny" style={{ opacity: 0.8 }}>de 5</span>
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="label muted" style={{ fontSize: 10 }}>Puntuación de respeto</div>
-        {has ? <div className="row" style={{ gap: 6, marginTop: 4 }}><Stars value={Number(card.respect_score)} /><span className="tiny muted">{card.respect_count} valoraci{card.respect_count === 1 ? 'ón' : 'ones'}</span></div>
-          : <div className="small" style={{ marginTop: 4 }}>{mine ? 'Aún sin valoraciones' : 'Todavía no tiene valoraciones'}</div>}
-        <div className="tiny muted" style={{ marginTop: 4 }}>La dan, de forma anónima, las personas con las que habló 4 minutos o más.</div>
-      </div>
+    <div className="cover">
+      {url ? <img src={url} alt="" /> : <Stripes seed={seed} color="#0E0E10" opacity={0.18} />}
+      {children}
     </div>
   );
 }
 
+export const respectLevel = (score: number | null | undefined, count: number) => {
+  if (!count || score == null) return { label: 'Sin valoraciones todavía', color: 'var(--mist)' };
+  const s = Number(score);
+  if (s >= 4.5) return { label: 'Muy respetuoso/a', color: 'var(--ok)' };
+  if (s >= 3.5) return { label: 'Respetuoso/a', color: '#9fe3b0' };
+  if (s >= 2.5) return { label: 'Mejorable', color: 'var(--warn)' };
+  return { label: 'Poco respetuoso/a', color: 'var(--coral-mid)' };
+};
 
+export function RespectInfoSheet({ onClose }: { onClose: () => void }) {
+  return (
+    <Sheet onClose={onClose} label="Puntuación de respeto">
+      <div className="center" style={{ fontSize: 40 }}>⭐</div>
+      <h2 className="h2 center" style={{ margin: '6px 0 10px' }}>¿Qué es la puntuación de respeto?</h2>
+      <div className="grid small" style={{ gap: 12 }}>
+        <div className="row" style={{ alignItems: 'flex-start' }}><span className="step-n">1</span><span>Cuando hablas con alguien <b>4 minutos o más</b>, al colgar los dos podéis valorar con un toque si la otra persona fue respetuosa.</span></div>
+        <div className="row" style={{ alignItems: 'flex-start' }}><span className="step-n">2</span><span>Es <b>anónimo</b>: nadie sabe quién le ha valorado. La media aparece en el perfil.</span></div>
+        <div className="row" style={{ alignItems: 'flex-start' }}><span className="step-n">3</span><span>Las personas con <b>mejor puntuación aparecen antes</b> al conectar. Las que reciben malas valoraciones se revisan.</span></div>
+      </div>
+      <p className="tiny muted center" style={{ margin: '14px 0' }}>Respetar un «no», no presionar y tratar bien a los demás es lo que más cuenta.</p>
+      <button className="btn primary" onClick={onClose}>Entendido</button>
+    </Sheet>
+  );
+}
+
+function RespectCard({ card, mine }: { card: ProfileCard; mine?: boolean }) {
+  const [info, setInfo] = useState(false);
+  const has = card.respect_count > 0;
+  const lv = respectLevel(card.respect_score, card.respect_count);
+  return (
+    <section className="pblock respect-block">
+      <div className="between" style={{ marginBottom: 10 }}>
+        <span className="pblock-title"><span className="pblock-ic" style={{ background: 'rgba(255,196,107,.15)', color: 'var(--warn)' }}><Icon n="star" c="s" /></span>Puntuación de respeto</span>
+        <button className="tiny link" onClick={() => setInfo(true)}>¿Qué es?</button>
+      </div>
+      <div className="row" style={{ gap: 14 }}>
+        <div className="respect-score"><b>{has ? Number(card.respect_score).toFixed(1).replace('.', ',') : '—'}</b><span>de 5</span></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 800, color: lv.color }}>{lv.label}</div>
+          {has && <div className="row" style={{ gap: 6, marginTop: 4 }}><Stars value={Number(card.respect_score)} /><span className="tiny muted">{card.respect_count} valoraci{card.respect_count === 1 ? 'ón' : 'ones'}</span></div>}
+          <div className="tiny muted" style={{ marginTop: 4 }}>{mine ? 'Te valoran, de forma anónima, las personas con las que hablas 4 minutos o más.' : 'Valoraciones anónimas tras llamadas de 4 minutos o más.'}</div>
+        </div>
+      </div>
+      {info && <RespectInfoSheet onClose={() => setInfo(false)} />}
+    </section>
+  );
+}
+
+const BLOCK_STYLE: Record<string, [string, string, string]> = {
+  'Biografía': ['edit', 'rgba(185,164,255,.15)', 'var(--violet-soft)'],
+  'Sobre mí': ['edit', 'rgba(185,164,255,.15)', 'var(--violet-soft)'],
+  'Identidad': ['user', 'rgba(110,150,255,.15)', '#b9cdff'],
+  'Gustos e intereses': ['sparkles', 'rgba(255,196,107,.15)', 'var(--warn)'],
+  'Deseos': ['heart', 'rgba(255,59,107,.15)', 'var(--coral-mid)'],
+  'Fotos y vídeos': ['image', 'rgba(107,227,166,.12)', 'var(--ok)'],
+  'Privacidad': ['shield', 'rgba(185,164,255,.15)', 'var(--violet-soft)'],
+  'A quién quiero conocer': ['users', 'rgba(110,150,255,.15)', '#b9cdff'],
+  'País': ['globe', 'rgba(107,227,166,.12)', 'var(--ok)'],
+  'Edad': ['clock', 'rgba(255,196,107,.15)', 'var(--warn)'],
+  'Deseos que busco': ['heart', 'rgba(255,59,107,.15)', 'var(--coral-mid)'],
+};
 function ProfileBlock({ title, onEdit, children }: { title: string; onEdit?: () => void; children: React.ReactNode }) {
+  const st = BLOCK_STYLE[title.split(' · ')[0]] ?? ['info', 'rgba(246,240,235,.08)', 'var(--cream)'];
   return (
     <section className="pblock">
-      <div className="between" style={{ marginBottom: 10 }}><span className="label muted" style={{ fontSize: 10.5 }}>{title}</span>{onEdit && <button className="tiny link" onClick={onEdit}>Editar</button>}</div>
+      <div className="between" style={{ marginBottom: 12 }}>
+        <span className="pblock-title"><span className="pblock-ic" style={{ background: st[1], color: st[2] }}><Icon n={st[0]} c="s" /></span>{title}</span>
+        {onEdit && <button className="tiny link" onClick={onEdit}>Editar</button>}
+      </div>
       {children}
     </section>
   );
@@ -130,6 +198,7 @@ export function MyProfile() {
   const pubIn = useRef<HTMLInputElement>(null);
   const privIn = useRef<HTMLInputElement>(null);
   const avIn = useRef<HTMLInputElement>(null);
+  const coverIn = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     const { data } = await supabase.from('photos').select('*').eq('owner', myId).order('created_at', { ascending: false });
@@ -147,16 +216,35 @@ export function MyProfile() {
 
   const upload = async (file: File | undefined, priv: boolean) => {
     if (!file) return;
+    const isVideo = file.type.startsWith('video/');
+    if (isVideo && file.size > MAX_VIDEO_MB * 1024 * 1024) { toast(`El vídeo supera ${MAX_VIDEO_MB} MB. Recórtalo o grábalo más corto.`, true); return; }
     setBusy(true);
     try {
-      const blob = await compressImage(file);
-      const path = `${myId}/${priv ? 'private' : 'public'}/${uid()}.jpg`;
+      const blob = isVideo ? file : await compressImage(file);
+      const ext = isVideo ? videoExt(file.type) : 'jpg';
+      const path = `${myId}/${priv ? 'private' : 'public'}/${uid()}.${ext}`;
+      const up = await supabase.storage.from('photos').upload(path, blob, { contentType: isVideo ? (file.type || 'video/mp4') : 'image/jpeg' });
+      if (up.error) throw up.error;
+      const { error } = await supabase.from('photos').insert({ path, is_private: priv, kind: isVideo ? 'video' : 'image' });
+      if (error) { await supabase.storage.from('photos').remove([path]); throw error; }
+      toast(isVideo ? (priv ? 'Vídeo privado añadido' : 'Vídeo público añadido') : (priv ? 'Foto privada añadida' : 'Foto pública añadida'));
+      load();
+    } catch (e) { toast(errText(e), true); } finally { setBusy(false); }
+  };
+
+  const setCover = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const blob = await compressImage(file, 1400);
+      const path = `${myId}/cover/${uid()}.jpg`;
       const up = await supabase.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg' });
       if (up.error) throw up.error;
-      const { error } = await supabase.from('photos').insert({ path, is_private: priv });
+      const old = me.cover_path;
+      const { error } = await supabase.from('profiles').update({ cover_path: path }).eq('id', myId);
       if (error) throw error;
-      toast(priv ? 'Foto privada añadida' : 'Foto pública añadida');
-      load();
+      if (old) { await supabase.storage.from('photos').remove([old]); forgetPhotoUrl(old); }
+      await refreshMe(); toast('Portada actualizada');
     } catch (e) { toast(errText(e), true); } finally { setBusy(false); }
   };
 
@@ -198,7 +286,9 @@ export function MyProfile() {
 
   return (
     <div className="fade" style={{ paddingBottom: 24 }}>
-      <div style={{ height: 110, position: 'relative', background: 'var(--g-coral)', overflow: 'hidden' }}><Stripes seed={91} color="#0E0E10" opacity={0.18} /></div>
+      <Cover path={me.cover_path} seed={91}>
+        <button className="cover-edit" onClick={() => coverIn.current?.click()} aria-label="Cambiar foto de portada"><Icon n="camera" c="s" /> Portada</button>
+      </Cover>
       <div className="pad" style={{ marginTop: -44, position: 'relative' }}>
         <div className="between" style={{ alignItems: 'flex-end' }}>
           <button style={{ border: '4px solid var(--ink)', borderRadius: '50%', display: 'inline-flex', position: 'relative' }} onClick={() => avIn.current?.click()} aria-label="Cambiar foto de perfil">
@@ -272,10 +362,10 @@ export function MyProfile() {
 
         {tab !== 'requests' ? (
           <>
-            <p className="tiny muted" style={{ marginBottom: 10 }}>{tab === 'public' ? 'Las ve cualquier persona verificada que visite tu perfil.' : 'Solo las ve quien tú apruebes. Los demás ven un candado y pueden pedirte acceso.'}</p>
+            <p className="tiny muted" style={{ marginBottom: 10 }}>{tab === 'public' ? 'Fotos y vídeos que ve cualquier persona verificada que visite tu perfil.' : 'Solo los ve quien tú apruebes, durante 12 horas. Los demás ven un candado y pueden pedirte acceso.'}</p>
             <div className="photo-grid">
               <button className="photo" style={{ border: '1.5px dashed var(--smoke)', flexDirection: 'column', gap: 4, color: 'var(--mist)', fontSize: 11, fontWeight: 800 }}
-                onClick={() => (tab === 'public' ? pubIn : privIn).current?.click()} disabled={busy} aria-label={`Añadir foto ${tab === 'public' ? 'pública' : 'privada'}`}>
+                onClick={() => (tab === 'public' ? pubIn : privIn).current?.click()} disabled={busy} aria-label={`Añadir foto o vídeo ${tab === 'public' ? 'público' : 'privado'}`}>
                 {busy ? <Spinner /> : <><Icon n="plus" /> Añadir</>}
               </button>
               {photos === null ? [0, 1].map((i) => <div key={i} className="photo skel" />) : list.map((p) => <PhotoTile key={p.id} photo={p} onOpen={() => setView(p)} />)}
@@ -309,10 +399,11 @@ export function MyProfile() {
         )}
         <button className="btn ghost" style={{ marginTop: 18 }} onClick={() => go({ name: 'user', id: myId })}><Icon n="eye" c="s" /> Ver mi perfil como lo ven los demás</button>
       </div>
-      <input ref={pubIn} type="file" accept="image/*" hidden onChange={(e) => { upload(e.target.files?.[0], false); e.target.value = ''; }} />
-      <input ref={privIn} type="file" accept="image/*" hidden onChange={(e) => { upload(e.target.files?.[0], true); e.target.value = ''; }} />
+      <input ref={pubIn} type="file" accept="image/*,video/*" hidden onChange={(e) => { upload(e.target.files?.[0], false); e.target.value = ''; }} />
+      <input ref={privIn} type="file" accept="image/*,video/*" hidden onChange={(e) => { upload(e.target.files?.[0], true); e.target.value = ''; }} />
       <input ref={avIn} type="file" accept="image/*" hidden onChange={(e) => { setAvatar(e.target.files?.[0]); e.target.value = ''; }} />
-      {view && <PhotoViewer photo={view} watermark={me.alias} onClose={() => setView(null)} onDelete={() => setDel(view)} />}
+      <input ref={coverIn} type="file" accept="image/*" hidden onChange={(e) => { setCover(e.target.files?.[0]); e.target.value = ''; }} />
+      {view && <PhotoViewer photo={view} onClose={() => setView(null)} onDelete={() => setDel(view)} />}
       {del && <ConfirmSheet title="¿Eliminar esta foto?" text="Se borrará para siempre." confirm="Eliminar" danger onConfirm={() => removePhoto(del)} onClose={() => setDel(null)} />}
     </div>
   );
@@ -326,35 +417,64 @@ export function UserProfile({ id }: { id: string }) {
   const toast = useToast();
   const [card, setCard] = useState<ProfileCard | null>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
-  const [access, setAccess] = useState<string | null>(null);
+  const [access, setAccess] = useState<{ status: string; decided_at: string | null } | null>(null);
   const [connected, setConnected] = useState(false);
   const [view, setView] = useState<Photo | null>(null);
   const [report, setReport] = useState(false);
+  const [mediaTab, setMediaTab] = useState<'public' | 'private'>('public');
+  useShotContext(own ? null : id, 'profile');
+  const [, tick] = useState(0);
 
   const load = useCallback(async () => {
     const [{ data: c }, { data: ph }, { data: a }, { data: conn }] = await Promise.all([
       supabase.from('profile_cards').select('*').eq('id', id).maybeSingle(),
       supabase.from('photos').select('*').eq('owner', id).order('created_at', { ascending: false }),
-      supabase.from('photo_access').select('status').eq('owner', id).eq('viewer', myId).maybeSingle(),
+      supabase.from('photo_access').select('status,decided_at').eq('owner', id).eq('viewer', myId).maybeSingle(),
       supabase.rpc('have_connected', { a: myId, b: id }),
     ]);
-    setCard(c as ProfileCard); setPhotos((ph as Photo[]) ?? []); setAccess(own ? 'approved' : (a?.status ?? null)); setConnected(!!conn);
+    setCard(c as ProfileCard); setPhotos((ph as Photo[]) ?? []); setConnected(!!conn);
+    setAccess(own ? { status: 'approved', decided_at: new Date().toISOString() } : (a as { status: string; decided_at: string | null } | null));
   }, [id, myId, own]);
   useEffect(() => { load(); }, [load]);
 
+  // En cuanto la otra persona aprueba o retira el permiso, se actualiza al momento (antes había que esperar)
+  useEffect(() => {
+    if (own) return;
+    const ch = supabase.channel(`access-${myId}-${id}-${Date.now()}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'photo_access', filter: `viewer=eq.${myId}` }, (p) => {
+        const row = (p.new && Object.keys(p.new).length ? p.new : p.old) as { owner?: string };
+        if (row?.owner !== id) return;
+        photos.filter((x) => x.is_private).forEach((x) => forgetPhotoUrl(x.path));
+        load();
+        if ((p.new as { status?: string })?.status === 'approved') toast('¡Ya puedes ver sus fotos y vídeos privados!');
+      })
+      .subscribe();
+    const t = setInterval(() => tick((x) => x + 1), 60000); // refrescar el tiempo restante
+    return () => { supabase.removeChannel(ch); clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, myId, own, load]);
+
   const request = async () => {
+    // Si había un permiso caducado o rechazado, se sustituye por una solicitud nueva
+    if (access) await supabase.from('photo_access').delete().eq('owner', id).eq('viewer', myId);
     const { error } = await supabase.from('photo_access').insert({ owner: id, viewer: myId });
     if (error) return toast(errText(error), true);
-    setAccess('pending'); toast(`Solicitud enviada a ${card?.alias}`);
+    setAccess({ status: 'pending', decided_at: null }); toast(`Solicitud enviada a ${card?.alias}`);
   };
   const cancel = async () => {
     await supabase.from('photo_access').delete().eq('owner', id).eq('viewer', myId);
     setAccess(null);
   };
 
-  if (!card) return (<><header className="topbar"><button className="icon-btn" style={{ marginLeft: -8 }} onClick={back} aria-label="Volver"><Icon n="arrowL" /></button></header><div className="center" style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div></>);
+  if (!card) return (<><header className="topbar"><button className="icon-btn" style={{ marginLeft: -8 }} onClick={back} aria-label="Volver"><Icon n="arrowL" /></button></header><div className="center" style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><ZLoader /></div></>);
   const pub = photos.filter((p) => !p.is_private), priv = photos.filter((p) => p.is_private);
-  const canSee = access === 'approved';
+  const expiresAt = access?.status === 'approved' && access.decided_at ? new Date(access.decided_at).getTime() + 12 * 3600e3 : 0;
+  const canSee = own || (access?.status === 'approved' && expiresAt > Date.now());
+  const expired = !own && access?.status === 'approved' && expiresAt <= Date.now();
+  const left = Math.max(0, expiresAt - Date.now());
+  const leftTxt = left > 3600e3 ? `${Math.floor(left / 3600e3)} h ${Math.floor((left % 3600e3) / 60000)} min` : `${Math.ceil(left / 60000)} min`;
+  const list = mediaTab === 'public' ? pub : priv;
+  const commonDesires = !own && (me.desires ?? []).some((d) => (card.desires ?? []).includes(d));
 
   return (
     <>
@@ -363,69 +483,72 @@ export function UserProfile({ id }: { id: string }) {
         <div className="title">{own ? 'Así te ven los demás' : card.alias}</div>
         {!own && <button className="icon-btn" onClick={() => setReport(true)} aria-label="Denunciar o bloquear"><Icon n="flag" c="s" /></button>}
       </header>
-      <main className="scroll"><div className="pad fade" style={{ paddingBottom: 30 }}>
-        <div className="row" style={{ gap: 14, marginTop: 6 }}>
-          <span style={{ position: 'relative', display: 'inline-flex' }}><Avatar id={card.id} path={card.avatar_path} size={88} />{card.online && <span className="online-dot big" title="En línea" />}</span>
-          <div style={{ minWidth: 0 }}>
-            <h1 className="h2">{card.alias}{card.age ? `, ${card.age}` : ''}</h1>
-            {card.country && <div className="small" style={{ marginTop: 2 }}>{flag(card.country)} {countryName(card.country)}</div>}
-            <div className="tiny muted" style={{ marginTop: 2 }}>{card.online ? <span style={{ color: 'var(--ok)', fontWeight: 800 }}>● En línea</span> : `${card.connections} conexiones`}</div>
+      <main className="scroll"><div className="fade" style={{ paddingBottom: 30 }}>
+        <Cover path={card.cover_path} seed={id.charCodeAt(0) + 7} />
+        <div className="pad" style={{ marginTop: -46, position: 'relative' }}>
+          <div className="between" style={{ alignItems: 'flex-end' }}>
+            <span className="avatar-ring"><Avatar id={card.id} path={card.avatar_path} size={92} />{card.online && <span className="online-dot big" title="En línea" />}</span>
+            {!own && connected && <button className="btn primary sm" onClick={() => go({ name: 'chat', partner: id })}><Icon n="chat" c="s" /> Mensaje</button>}
           </div>
-        </div>
-        <div className="chips" style={{ marginTop: 10 }}>
-          {card.verified && <span className="badge-pill ok"><Icon n="badgeCheck" c="s" /> Edad verificada</span>}
-          {card.verified && <span className="badge-pill blue"><Icon n="shieldCheck" c="s" /> Perfil verificado</span>}
-          {card.showroom && <span className="badge-pill coral"><Icon n="sparkles" c="s" /> Showroom</span>}
-        </div>
-        <div className="stats3">
-          <div><b>{card.connections}</b><span>Conexiones</span></div>
-          <div><b>{card.likes_received ?? 0}</b><span>Me gusta</span></div>
-          <div><b>{card.respect_count ? Number(card.respect_score).toFixed(1).replace('.', ',') : '—'}</b><span>Respeto</span></div>
-        </div>
-        {card.bio && <ProfileBlock title="Sobre mí"><p className="small">{card.bio}</p></ProfileBlock>}
-        {(card.gender || card.sexuality || card.pronouns) && (
-          <ProfileBlock title="Identidad">
-            {card.gender && <InfoRow k="Se identifica como" v={genderLabel(card.gender)} />}
-            {card.sexuality && <InfoRow k="Orientación" v={card.sexuality} />}
-            {card.pronouns && <InfoRow k="Pronombres" v={card.pronouns} />}
-          </ProfileBlock>
-        )}
-        {card.interests.length > 0 && (
-          <ProfileBlock title="Gustos e intereses">
-            <div className="chips">{card.interests.map((x) => <span key={x} className={`chip ${!own && me.interests.includes(x) ? 'on' : ''}`}>{x}</span>)}</div>
-          </ProfileBlock>
-        )}
-        {card.desires && card.desires.length > 0 && (
-          <ProfileBlock title={!own && (me.desires ?? []).some((d) => card.desires!.includes(d)) ? 'Deseos · tenéis cosas en común' : 'Deseos'}>
-            <div className="chips">{card.desires.map((x) => <span key={x} className={`chip ${!own && (me.desires ?? []).includes(x) ? 'on' : ''}`}>{x}</span>)}</div>
-          </ProfileBlock>
-        )}
-        <RespectCard card={card} />
-        {!own && connected && (
-          <div className="row" style={{ gap: 8, marginTop: 12 }}>
-            <button className="btn primary" onClick={() => go({ name: 'chat', partner: id })}><Icon n="chat" c="s" /> Chat</button>
+          <h1 className="h1" style={{ fontSize: 26, marginTop: 10 }}>{card.alias}{card.age ? `, ${card.age}` : ''}</h1>
+          <div className="row small" style={{ gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
+            {card.country && <span>{flag(card.country)} {countryName(card.country)}</span>}
+            {card.online ? <span style={{ color: 'var(--ok)', fontWeight: 800 }}>● En línea</span> : null}
           </div>
-        )}
+          <div className="chips" style={{ marginTop: 10 }}>
+            {card.verified && <span className="badge-pill ok"><Icon n="badgeCheck" c="s" /> Edad verificada</span>}
+            {card.verified && <span className="badge-pill blue"><Icon n="shieldCheck" c="s" /> Perfil verificado</span>}
+            {card.showroom && <span className="badge-pill coral"><Icon n="sparkles" c="s" /> Showroom</span>}
+          </div>
+          <div className="stats3">
+            <div><b>{card.connections}</b><span>Conexiones</span></div>
+            <div><b>{card.likes_received ?? 0}</b><span>Me gusta</span></div>
+            <div><b style={{ color: respectLevel(card.respect_score, card.respect_count).color }}>{card.respect_count ? Number(card.respect_score).toFixed(1).replace('.', ',') : '—'}</b><span>Respeto</span></div>
+          </div>
 
-        <div className="section-title"><span className="h3">Fotos públicas</span><span className="tiny muted">{pub.length}</span></div>
-        {pub.length === 0 ? <div className="card small muted center">Sin fotos públicas.</div> : <div className="photo-grid">{pub.map((p) => <PhotoTile key={p.id} photo={p} onOpen={() => setView(p)} />)}</div>}
+          <div className="pstack">
+            {card.bio && <ProfileBlock title="Sobre mí"><p className="small">{card.bio}</p></ProfileBlock>}
 
-        <div className="section-title"><span className="h3">Fotos privadas</span><span className="tiny muted">{priv.length}</span></div>
-        {priv.length === 0 ? <div className="card small muted center">Sin fotos privadas.</div> : (
-          <>
-            <div className="photo-grid">{priv.map((p) => <PhotoTile key={p.id} photo={p} locked={!canSee} onOpen={() => canSee && setView(p)} />)}</div>
-            {!own && (
-              <div style={{ marginTop: 12 }}>
-                {access === null && <button className="btn secondary" onClick={request}><Icon n="unlock" c="s" /> Pedir ver sus fotos privadas</button>}
-                {access === 'pending' && <div className="notice"><Icon n="clock" c="s" /><span style={{ flex: 1 }}>Solicitud enviada. {card.alias} decidirá si te da acceso.</span><button className="tiny link" onClick={cancel}>Cancelar</button></div>}
-                {access === 'denied' && <div className="notice coral"><Icon n="lock" c="s" /><span>{card.alias} ha preferido no compartir sus fotos privadas.</span></div>}
-                {access === 'approved' && <div className="notice ok"><Icon n="unlock" c="s" /><span>{card.alias} te ha dado acceso a sus fotos privadas.</span></div>}
-              </div>
+            {(card.gender || card.sexuality || card.pronouns) && (
+              <ProfileBlock title="Identidad">
+                {card.gender && <InfoRow k="Se identifica como" v={genderLabel(card.gender)} />}
+                {card.sexuality && <InfoRow k="Orientación" v={card.sexuality} />}
+                {card.pronouns && <InfoRow k="Pronombres" v={card.pronouns} />}
+              </ProfileBlock>
             )}
-          </>
-        )}
+
+            <ProfileBlock title="Fotos y vídeos">
+              <div className="tabs" role="tablist" style={{ marginBottom: 12 }}>
+                <button role="tab" aria-selected={mediaTab === 'public'} className={mediaTab === 'public' ? 'on' : ''} onClick={() => setMediaTab('public')}>Públicos · {pub.length}</button>
+                <button role="tab" aria-selected={mediaTab === 'private'} className={mediaTab === 'private' ? 'on' : ''} onClick={() => setMediaTab('private')}><Icon n="lock" c="s" /> Privados · {priv.length}</button>
+              </div>
+              {list.length === 0 ? <p className="small muted center" style={{ padding: '14px 0' }}>{mediaTab === 'public' ? 'Sin fotos ni vídeos públicos.' : 'Sin fotos ni vídeos privados.'}</p>
+                : <div className="photo-grid">{list.map((p) => <PhotoTile key={p.id} photo={p} locked={p.is_private && !canSee} onOpen={() => (!p.is_private || canSee) && setView(p)} />)}</div>}
+              {mediaTab === 'private' && priv.length > 0 && !own && (
+                <div style={{ marginTop: 12 }}>
+                  {(access === null || expired) && <button className="btn secondary" onClick={request}><Icon n="unlock" c="s" /> {expired ? 'Tu acceso caducó · pedir de nuevo' : 'Pedir ver sus fotos y vídeos privados'}</button>}
+                  {access?.status === 'pending' && <div className="notice"><Icon n="clock" c="s" /><span style={{ flex: 1 }}>Solicitud enviada. Te avisaremos en cuanto {card.alias} decida.</span><button className="tiny link" onClick={cancel}>Cancelar</button></div>}
+                  {access?.status === 'denied' && <div className="notice coral"><Icon n="lock" c="s" /><span>{card.alias} ha preferido no compartirlos.</span></div>}
+                  {canSee && <div className="notice ok"><Icon n="unlock" c="s" /><span>Puedes verlos durante <b>{leftTxt}</b> más.</span></div>}
+                </div>
+              )}
+            </ProfileBlock>
+
+            {card.interests.length > 0 && (
+              <ProfileBlock title="Gustos e intereses">
+                <div className="chips">{card.interests.map((x) => <span key={x} className={`chip ${!own && me.interests.includes(x) ? 'on' : ''}`}>{x}</span>)}</div>
+              </ProfileBlock>
+            )}
+            {card.desires && card.desires.length > 0 && (
+              <ProfileBlock title={commonDesires ? 'Deseos · tenéis cosas en común' : 'Deseos'}>
+                <div className="chips">{card.desires.map((x) => <span key={x} className={`chip ${!own && (me.desires ?? []).includes(x) ? 'on' : ''}`}>{x}</span>)}</div>
+              </ProfileBlock>
+            )}
+            <RespectCard card={card} />
+          </div>
+        </div>
       </div></main>
-      {view && <PhotoViewer photo={view} watermark={me.alias} onClose={() => setView(null)} />}
+      {view && <PhotoViewer photo={view} onClose={() => setView(null)} />}
       {report && <ReportSheet userId={id} alias={card.alias} onClose={() => setReport(false)} onBlocked={back} />}
     </>
   );

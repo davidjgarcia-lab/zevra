@@ -14,11 +14,11 @@ export interface ProfileCard {
   verified: boolean; age: number | null; respect_score: number | null; respect_count: number; connections: number;
   gender?: Gender | null; seeking?: Gender[];
   country?: string | null; sexuality?: string | null; desires?: string[]; showroom?: boolean;
-  online?: boolean; likes_received?: number; created_at?: string;
+  online?: boolean; likes_received?: number; created_at?: string; cover_path?: string | null;
 }
 export type Gender = string;
 export const GENDERS: Array<[Gender, string, string]> = [['mujer', 'Mujer', 'Mujeres'], ['hombre', 'Hombre', 'Hombres'], ['no_binario', 'No binario', 'No binarias']];
-export interface Photo { id: string; owner: string; path: string; is_private: boolean; created_at: string }
+export interface Photo { id: string; owner: string; path: string; is_private: boolean; created_at: string; kind?: 'image' | 'video' }
 export interface Message {
   id: string; sender: string; recipient: string; kind: 'text' | 'image' | 'video'; body: string | null;
   media_path: string | null; created_at: string; read_at: string | null; viewed_at: string | null;
@@ -66,3 +66,4 @@ export async function photoUrl(path: string | null | undefined): Promise<string 
   return data.signedUrl;
 }
 export function forgetPhotoUrl(path: string) { urlCache.delete(path); }
+export function clearPhotoUrls() { urlCache.clear(); }

@@ -1,16 +1,19 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PullToRefresh } from './lib/pull';
+import { pushBackId, releaseBack, releaseMany } from './lib/back';
 import type { Session } from '@supabase/supabase-js';
 import { CONFIGURED } from './config';
-import { supabase, type Mode, type ProfileCard } from './lib/supabase';
+import { clearPhotoUrls, supabase, type Mode, type ProfileCard } from './lib/supabase';
 import { listenNativeAuth } from './lib/native';
 import { ShieldOverlay, useScreenShield } from './lib/protect';
 import { Ctx, ls, type AppCtx, type CallFlow, type Route, type Tab } from './store';
-import { Icon, Logo, Spinner, ToastProvider, useToast } from './ui';
+import { Icon, Logo, ToastProvider, ZLoader, useToast } from './ui';
 import { Auth, NewPassword } from './screens/Auth';
 import { Home } from './screens/Home';
 import { InstallButton } from './screens/Install';
 import { closePeer, warmUp } from './lib/rtc';
 import { detectCountry } from './lib/catalog';
+import { SHOT_TEXT } from './lib/shots';
 
 // Carga diferida: cada pantalla se descarga solo cuando se usa (arranque más rápido)
 const Verify = lazy(() => import('./screens/Verify').then((m) => ({ default: m.Verify })));
@@ -92,7 +95,7 @@ function Root() {
 }
 
 function Loading() {
-  return <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 20, alignItems: 'center', justifyContent: 'center' }}><Logo s={26} /><Spinner /></div>;
+  return <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 18, alignItems: 'center', justifyContent: 'center' }}><ZLoader size={84} /><span className="label" style={{ letterSpacing: '.3em', opacity: 0.7 }}>ZEVRA</span></div>;
 }
 
 function ProfileMissing({ onRetry }: { onRetry: () => void }) {
@@ -122,16 +125,37 @@ function NotConfigured() {
 interface Invite { id: string; caller: string; mode: Mode; partner: ProfileCard | null }
 
 function Main({ session, me, refreshMe }: { session: Session; me: ProfileCard; refreshMe: () => Promise<void> }) {
-  const [stack, setStack] = useState<Route[]>([{ name: 'tabs', tab: 'home' }]);
+  // Pila de pantallas enlazada con el historial: el botón «atrás» del móvil vuelve a la anterior
+  const stackRef = useRef<Array<{ r: Route; id?: number }>>([{ r: { name: 'tabs', tab: 'home' } }]);
+  const [, render] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const toast = useToast();
   const [call, setCall] = useState<{ flow: CallFlow; key: number } | null>(null);
   const [invite, setInvite] = useState<Invite | null>(null);
   const [unread, setUnread] = useState(0);
   const [requests, setRequests] = useState(0);
   const myId = session.user.id;
-  const route = stack[stack.length - 1];
+  const route = stackRef.current[stackRef.current.length - 1].r;
 
-  const go = useCallback((r: Route) => setStack((s) => (r.name === 'tabs' ? [r] : [...s, r])), []);
-  const back = useCallback(() => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)), []);
+  const go = useCallback((r: Route) => {
+    const s = stackRef.current;
+    if (r.name === 'tabs' && r.tab === 'home') {
+      releaseMany(s.map((e) => e.id).filter((x): x is number => !!x));
+      stackRef.current = [{ r }]; render((x) => x + 1); return;
+    }
+    const top = s[s.length - 1].r;
+    if (r.name === 'tabs' && top.name === 'tabs' && top.tab === r.tab) return;
+    const entry: { r: Route; id?: number } = { r };
+    entry.id = pushBackId(() => { stackRef.current = stackRef.current.filter((e) => e !== entry); render((x) => x + 1); });
+    stackRef.current = [...s, entry]; render((x) => x + 1);
+  }, []);
+  const back = useCallback(() => {
+    const s = stackRef.current;
+    if (s.length <= 1) return;
+    const top = s[s.length - 1];
+    if (top.id) releaseBack(top.id);
+    stackRef.current = s.slice(0, -1); render((x) => x + 1);
+  }, []);
 
   const refreshUnread = useCallback(async () => {
     const { count } = await supabase.from('messages').select('id', { count: 'exact', head: true }).eq('recipient', myId).is('read_at', null);
@@ -160,16 +184,18 @@ function Main({ session, me, refreshMe }: { session: Session; me: ProfileCard; r
         setInvite({ id: row.id, caller: row.caller, mode: row.mode, partner: data as ProfileCard });
         warmUp();
       })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'screenshot_alerts', filter: `owner=eq.${myId}` }, async (p) => {
+        const a = p.new as { actor: string; context: keyof typeof SHOT_TEXT };
+        const { data } = await supabase.from('profile_cards').select('alias').eq('id', a.actor).maybeSingle();
+        toast(`⚠️ ${data?.alias ?? 'Alguien'} ha intentado hacer una captura de ${SHOT_TEXT[a.context] ?? 'tu contenido'}. La captura ha salido en negro.`, true);
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'call_invites', filter: `callee=eq.${myId}` }, (p) => {
         const row = p.new as { id: string; status: string };
         if (row.status === 'cancelled') setInvite((i) => (i?.id === row.id ? null : i));
       })
       .subscribe();
-    // Android: volver atrás con el botón del sistema
-    const onPop = () => back();
-    window.addEventListener('zevra-back', onPop);
-    return () => { supabase.removeChannel(ch); window.removeEventListener('zevra-back', onPop); clearInterval(presence); document.removeEventListener('visibilitychange', touch); };
-  }, [myId, refreshUnread, refreshRequests, back]);
+    return () => { supabase.removeChannel(ch); clearInterval(presence); document.removeEventListener('visibilitychange', touch); };
+  }, [myId, refreshUnread, refreshRequests]);
 
   // País sugerido la primera vez (por IP; si falla, idioma y zona horaria). Se puede cambiar en el perfil.
   useEffect(() => {
@@ -219,7 +245,14 @@ function Main({ session, me, refreshMe }: { session: Session; me: ProfileCard; r
 
   return (
     <Ctx.Provider value={ctx}>
-      <Suspense fallback={<div style={{ flex: 1 }} />}>{screen}</Suspense>
+      <Suspense fallback={<div className="screen-loader"><ZLoader size={48} /></div>}><Fragment key={refreshKey}>{screen}</Fragment></Suspense>
+      <PullToRefresh onRefresh={async () => {
+        clearPhotoUrls();
+        await Promise.all([refreshMe(), refreshUnread(), refreshRequests()]);
+        setRefreshKey((k) => k + 1);
+        // ¿Hay una versión nueva de la app? Se instala sola
+        navigator.serviceWorker?.getRegistration().then((r) => r?.update()).catch(() => {});
+      }} />
       <Suspense fallback={null}>
       {call && <Call key={call.key} flow={call.flow} onClose={() => { setCall(null); refreshMe(); }} onAgain={() => setCall({ flow: call.flow.kind === 'invite-in' ? { kind: 'match', mode: call.flow.mode } : call.flow, key: Date.now() })} />}
       {invite && !call && (

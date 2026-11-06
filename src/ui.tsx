@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useBackHandler } from './lib/back';
 import { photoUrl } from './lib/supabase';
 
 /* ---------------- Iconos (Lucide) ---------------- */
@@ -145,6 +146,24 @@ export function Check({ on, onChange, children }: { on: boolean; onChange: (v: b
   );
 }
 export function Spinner({ label = 'Cargando' }: { label?: string }) { return <div className="spinner" role="status" aria-label={label} />; }
+
+/** Animación de carga de ZEVRA: la Z se dibuja sola con un degradado y late suavemente. */
+export function ZLoader({ size = 64, label = 'Cargando' }: { size?: number; label?: string }) {
+  const id = useMemo(() => `zl${++zid}`, []);
+  return (
+    <span className="zloader" role="status" aria-label={label} style={{ width: size, height: size }}>
+      <svg viewBox="0 0 100 100" width={size} height={size} aria-hidden="true">
+        <defs>
+          <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#FF86A4" /><stop offset=".5" stopColor="#FF3B6B" /><stop offset="1" stopColor="#7A4DFF" />
+          </linearGradient>
+        </defs>
+        <path className="zl-track" d="M23 26 H73 L27 74 H77" fill="none" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+        <path className="zl-draw" d="M23 26 H73 L27 74 H77" fill="none" stroke={`url(#${id})`} strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" pathLength={100} />
+      </svg>
+    </span>
+  );
+}
 export function Stars({ value }: { value: number }) {
   return (
     <span className="stars" aria-label={`${value.toFixed(1)} de 5`}>
@@ -156,6 +175,7 @@ export function Stars({ value }: { value: number }) {
   );
 }
 export function Sheet({ onClose, children, label }: { onClose: () => void; children: ReactNode; label: string }) {
+  useBackHandler(onClose);
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k);
@@ -187,7 +207,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const push = useCallback((msg: string, bad?: boolean) => {
     const id = Date.now() + Math.random();
     setItems((x) => [...x, { id, msg, bad }]);
-    setTimeout(() => setItems((x) => x.filter((t) => t.id !== id)), 3200);
+    setTimeout(() => setItems((x) => x.filter((t) => t.id !== id)), bad ? 6000 : 3200);
   }, []);
   return (
     <ToastCtx.Provider value={push}>

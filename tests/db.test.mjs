@@ -208,4 +208,31 @@ await expect('hugo no puede terminar el directo de gala', async()=>{ await as(G.
 await expect('gala termina el directo', ()=>as(G.gala, `select end_live($1)`, [liveId]));
 await expect('directo terminado no admite espectadores', ()=>as(G.iris, `select join_live($1)`, [liveId]), true);
 await expect('bloqueado no ve directos', async()=>{ await as(G.gala, `update profiles set showroom=true where id=$1`, [G.gala]); const l2 = await rows(G.gala, `select start_live('2','p2') as id`); await as(G.gala, `insert into blocks (blocker, blocked) values ($1,$2)`, [G.gala, G.iris]); const r = await rows(G.iris, `select id from lives where id=$1`, [l2[0].id]); if (r.length) throw new Error('lo ve'); });
+// ---- actualización 06: vídeos, portada, miniaturas, acceso 12 h
+const up6 = fs.readFileSync(new URL('../supabase/upgrade-06.sql', import.meta.url), 'utf8');
+try { await db.exec(up6); await db.exec(up6); } catch (e) { console.log('UPGRADE 06 ERROR:', e.message); process.exit(1); }
+await expect('vídeo en el perfil', ()=>as(G.hugo, `insert into photos (path, is_private, kind) values ($1,false,'video')`, [G.hugo+'/public/v.mp4']));
+await expect('tipo inválido', ()=>as(G.hugo, `insert into photos (path, is_private, kind) values ($1,false,'gif')`, [G.hugo+'/public/x.gif']), true);
+await expect('portada propia', ()=>as(G.hugo, `update profiles set cover_path=$2 where id=$1`, [G.hugo, G.hugo+'/cover/c.jpg']));
+await db.query(`insert into storage.objects (bucket_id, name) values ('photos',$1),('photos',$2),('photos',$3)`, [G.hugo+'/cover/c.jpg', G.hugo+'/live/t.jpg', G.hugo+'/private/p.jpg']);
+await expect('otros ven portada y miniatura, no la privada', async()=>{ const r = await rows(G.iris, `select name from storage.objects where bucket_id='photos' and name like $1`, [G.hugo+'/%']); const n = r.map(x=>x.name); if (!n.includes(G.hugo+'/cover/c.jpg') || !n.includes(G.hugo+'/live/t.jpg') || n.includes(G.hugo+'/private/p.jpg')) throw new Error(JSON.stringify(n)); });
+await as(G.iris, `delete from blocks where blocker=$1`, [G.iris]).catch(()=>{});
+await as(G.iris, `insert into photo_access (owner, viewer) values ($1,$2)`, [G.hugo, G.iris]);
+await as(G.hugo, `update photo_access set status='approved', decided_at=now() where owner=$1 and viewer=$2`, [G.hugo, G.iris]);
+await expect('con permiso ve la privada', async()=>{ const r = await rows(G.iris, `select name from storage.objects where name=$1`, [G.hugo+'/private/p.jpg']); if (r.length !== 1) throw new Error('no la ve'); });
+await db.query(`update photo_access set decided_at = now() - interval '13 hours' where owner=$1 and viewer=$2`, [G.hugo, G.iris]);
+await expect('a las 12 h el permiso caduca', async()=>{ const r = await rows(G.iris, `select name from storage.objects where name=$1`, [G.hugo+'/private/p.jpg']); if (r.length) throw new Error('sigue viéndola'); });
+await expect('puede volver a pedir permiso (borrar y pedir)', async()=>{ await as(G.iris, `delete from photo_access where owner=$1 and viewer=$2`, [G.hugo, G.iris]); await as(G.iris, `insert into photo_access (owner, viewer) values ($1,$2)`, [G.hugo, G.iris]); });
+await as(G.hugo, `update profiles set showroom=true where id=$1`, [G.hugo]);
+const lh = await rows(G.hugo, `select start_live('t','p-h') as id`);
+await expect('miniatura del directo', async()=>{ await as(G.hugo, `select set_live_thumb($1,$2)`, [lh[0].id, G.hugo+'/live/t.jpg']); const r = await db.query('select thumb_path from lives where id=$1', [lh[0].id]); if (r.rows[0].thumb_path !== G.hugo+'/live/t.jpg') throw new Error('no'); });
+await expect('miniatura con ruta ajena se ignora', async()=>{ await as(G.hugo, `select set_live_thumb($1,$2)`, [lh[0].id, G.gala+'/live/x.jpg']); const r = await db.query('select thumb_path from lives where id=$1', [lh[0].id]); if (r.rows[0].thumb_path !== G.hugo+'/live/t.jpg') throw new Error('cambió'); });
+await expect('tarjeta con portada', async()=>{ const r = await rows(G.gala, `select cover_path from profile_cards where id=$1`, [G.hugo]); if (r[0].cover_path !== G.hugo+'/cover/c.jpg') throw new Error(JSON.stringify(r)); });
+// ---- actualización 07: avisos de captura
+const up7 = fs.readFileSync(new URL('../supabase/upgrade-07.sql', import.meta.url), 'utf8');
+try { await db.exec(up7); await db.exec(up7); } catch (e) { console.log('UPGRADE 07 ERROR:', e.message); process.exit(1); }
+await expect('aviso de captura', ()=>as(G.hugo, `insert into screenshot_alerts (owner, context) values ($1,'photo')`, [G.gala]));
+await expect('no puede firmar como otro', ()=>as(G.hugo, `insert into screenshot_alerts (owner, actor, context) values ($1,$2,'photo')`, [G.gala, G.iris]), true);
+await expect('la dueña ve el aviso', async()=>{ const r = await rows(G.gala, `select actor from screenshot_alerts`); if (r.length !== 1 || r[0].actor !== G.hugo) throw new Error(JSON.stringify(r)); });
+await expect('otros no ven avisos ajenos', async()=>{ const r = await rows(G.iris, `select * from screenshot_alerts`); if (r.length) throw new Error('ve'); });
 console.log(`\n${ok} OK, ${fail} FALLOS`); if (fail) process.exit(1);

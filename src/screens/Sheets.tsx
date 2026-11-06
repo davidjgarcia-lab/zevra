@@ -3,35 +3,49 @@ import { errText, supabase } from '../lib/supabase';
 import { REPORT_REASONS } from '../store';
 import { Check, Icon, Sheet, useToast } from '../ui';
 
+const RATE_OPTIONS: Array<[number, string, string]> = [
+  [1, '😠', 'Nada'], [2, '😕', 'Poco'], [3, '😐', 'Normal'], [4, '🙂', 'Sí'], [5, '😍', '¡Mucho!'],
+];
+
+/** Valoración de respeto en un toque: se envía al pulsar una cara. */
 export function RateSheet({ callId, partner, alias, onClose }: { callId: string; partner: string; alias: string; onClose: (rated: boolean) => void }) {
-  const [score, setScore] = useState(0);
+  const [sent, setSent] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [why, setWhy] = useState(false);
   const toast = useToast();
-  const send = async () => {
-    setBusy(true);
+  const rate = async (score: number) => {
+    if (busy || sent) return;
+    setBusy(true); setSent(score);
     const { error } = await supabase.from('ratings').insert({ call_id: callId, ratee: partner, score });
     setBusy(false);
-    if (error && !/duplicate/.test(error.message)) { toast(errText(error), true); return; }
-    toast('Gracias. Tu valoración es anónima.'); onClose(true);
+    if (error && !/duplicate/.test(error.message)) { setSent(null); toast(errText(error), true); return; }
+    setTimeout(() => onClose(true), 900);
   };
-  const words = ['', 'Nada respetuosa', 'Poco respetuosa', 'Correcta', 'Respetuosa', 'Muy respetuosa'];
   return (
-    <Sheet onClose={() => onClose(false)} label="Valorar respeto">
-      <div className="label muted center">Puntuación de respeto</div>
-      <h2 className="h2 center" style={{ margin: '6px 0 4px' }}>¿Ha sido {alias} una persona respetuosa?</h2>
-      <p className="small muted center" style={{ marginBottom: 18 }}>Es anónimo. Solo se puede valorar tras hablar 4 minutos o más.</p>
-      <div className="rate-stars" role="radiogroup" aria-label="Puntuación de 1 a 5">
-        {[1, 2, 3, 4, 5].map((i) => (
-          <button key={i} role="radio" aria-checked={score === i} aria-label={`${i} — ${words[i]}`} className={i <= score ? 'on' : ''} onClick={() => setScore(i)}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.5 2.3a.5.5 0 0 1 1 0l2.3 4.7a2 2 0 0 0 1.6 1.1l5.2.8a.5.5 0 0 1 .3.9l-3.8 3.7a2 2 0 0 0-.6 1.9l.9 5.2a.5.5 0 0 1-.8.6l-4.6-2.5a2 2 0 0 0-2 0L5.3 21.2a.5.5 0 0 1-.8-.6l.9-5.2a2 2 0 0 0-.6-1.9L1 9.8a.5.5 0 0 1 .3-.9l5.2-.8A2 2 0 0 0 8 7z" /></svg>
-          </button>
-        ))}
-      </div>
-      <p className="center small" style={{ minHeight: 22, marginTop: 10, fontWeight: 700 }}>{words[score]}</p>
-      <div className="grid" style={{ marginTop: 10 }}>
-        <button className="btn primary" disabled={!score || busy} onClick={send}>Enviar valoración</button>
-        <button className="btn" onClick={() => onClose(false)}>Ahora no</button>
-      </div>
+    <Sheet onClose={() => onClose(!!sent)} label="Valorar respeto">
+      {sent ? (
+        <div className="center fade" style={{ padding: '18px 0 8px' }}>
+          <div style={{ fontSize: 46 }}>{RATE_OPTIONS[sent - 1][1]}</div>
+          <h2 className="h2" style={{ margin: '8px 0 4px' }}>¡Gracias!</h2>
+          <p className="small muted">Tu valoración es anónima y ayuda a que ZEVRA sea un lugar respetuoso.</p>
+        </div>
+      ) : (
+        <>
+          <div className="label center" style={{ color: 'var(--warn)' }}>⭐ Puntuación de respeto</div>
+          <h2 className="h2 center" style={{ margin: '6px 0 4px' }}>¿{alias} ha sido respetuoso/a contigo?</h2>
+          <p className="small muted center" style={{ marginBottom: 16 }}>Toca una cara. Es anónimo: {alias} nunca sabrá qué has elegido.</p>
+          <div className="rate-faces" role="radiogroup" aria-label="Puntuación de respeto">
+            {RATE_OPTIONS.map(([v, face, label]) => (
+              <button key={v} role="radio" aria-checked={false} aria-label={`${v} de 5: ${label}`} onClick={() => rate(v)} disabled={busy}>
+                <span className="face">{face}</span><span>{label}</span>
+              </button>
+            ))}
+          </div>
+          <button className="tiny link center" style={{ display: 'block', margin: '14px auto 4px' }} onClick={() => setWhy(!why)}>¿Para qué sirve?</button>
+          {why && <p className="small muted center fade" style={{ marginBottom: 6 }}>La media aparece en el perfil de cada persona. Quien tiene mejor puntuación aparece antes al conectar, y las malas valoraciones se revisan.</p>}
+          <button className="btn" style={{ marginTop: 6 }} onClick={() => onClose(false)}>Ahora no</button>
+        </>
+      )}
     </Sheet>
   );
 }

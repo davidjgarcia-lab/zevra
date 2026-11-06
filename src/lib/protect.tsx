@@ -18,6 +18,9 @@ export function useScreenShield() {
         setTimeout(() => setHidden(false), 1500);
       }
     };
+    // App Android 14+: el sistema avisa de un intento de captura → tapamos la pantalla un momento
+    const onShot = () => { setHidden(true); setTimeout(() => setHidden(false), 2500); };
+    window.addEventListener('zevra-screenshot', onShot);
     const noMenu = (e: Event) => { const t = e.target as HTMLElement; if (!t.closest('input,textarea')) e.preventDefault(); };
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('focus', onFocus);
@@ -26,6 +29,7 @@ export function useScreenShield() {
     document.addEventListener('contextmenu', noMenu);
     document.addEventListener('dragstart', noMenu);
     return () => {
+      window.removeEventListener('zevra-screenshot', onShot);
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keyup', onKey);

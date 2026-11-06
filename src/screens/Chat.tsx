@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { errText, supabase, type Conversation, type Message, type ProfileCard } from '../lib/supabase';
 import { compressImage, MAX_VIDEO_MB, uid, videoExt } from '../lib/media';
-import { Watermark } from '../lib/protect';
+import { useBackHandler } from '../lib/back';
+import { useShotContext } from '../lib/shots';
 import { ls, useApp } from '../store';
 import { Avatar, Icon, Sheet, Spinner, timeAgo, useToast } from '../ui';
 import { EPHEMERAL_PHOTO_SECONDS } from '../config';
@@ -77,6 +78,7 @@ export function ChatRoom({ partnerId }: { partnerId: string }) {
   const [viewer, setViewer] = useState<{ kind: 'image' | 'video'; url: string } | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  useShotContext(partnerId, 'chat');
   const photoIn = useRef<HTMLInputElement>(null);
   const camIn = useRef<HTMLInputElement>(null);
   const videoIn = useRef<HTMLInputElement>(null);
@@ -249,19 +251,20 @@ export function ChatRoom({ partnerId }: { partnerId: string }) {
         </Sheet>
       )}
       {report && partner && <ReportSheet userId={partnerId} alias={partner.alias} onClose={() => setReport(false)} onBlocked={back} />}
-      {viewer && <EphemeralViewer kind={viewer.kind} url={viewer.url} watermark={me.alias} onClose={closeViewer} />}
+      {viewer && <EphemeralViewer kind={viewer.kind} url={viewer.url} onClose={closeViewer} />}
     </>
   );
 }
 
 /* ===================== Visor efímero ===================== */
-function EphemeralViewer({ kind, url, watermark, onClose }: { kind: 'image' | 'video'; url: string; watermark: string; onClose: () => void }) {
+function EphemeralViewer({ kind, url, onClose }: { kind: 'image' | 'video'; url: string; onClose: () => void }) {
   const [left, setLeft] = useState(EPHEMERAL_PHOTO_SECONDS);
   const [progress, setProgress] = useState(0);
   const [needsTap, setNeedsTap] = useState(false);
   const vref = useRef<HTMLVideoElement>(null);
   const closed = useRef(false);
   const close = useCallback(() => { if (!closed.current) { closed.current = true; onClose(); } }, [onClose]);
+  useBackHandler(close);
 
   useEffect(() => {
     const hide = () => { if (document.visibilityState === 'hidden') close(); };
@@ -299,7 +302,6 @@ function EphemeralViewer({ kind, url, watermark, onClose }: { kind: 'image' | 'v
           {needsTap && <button className="btn primary sm" style={{ position: 'absolute', zIndex: 8 }} onClick={() => { vref.current?.play(); setNeedsTap(false); }}>Reproducir</button>}
         </>
       )}
-      <Watermark text={watermark} />
       <button className="icon-btn" style={{ position: 'absolute', top: 'calc(10px + var(--st))', right: 10, zIndex: 8, background: 'rgba(14,14,16,.6)' }} onClick={close} aria-label="Cerrar"><Icon n="x" /></button>
     </div>
   );

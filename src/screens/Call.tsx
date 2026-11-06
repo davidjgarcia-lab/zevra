@@ -6,6 +6,7 @@ import { getLocalStream, openPeer, playRemoteAudio, stopRemoteAudio, stopStream,
 import { MODES, ls, useApp, type CallFlow } from '../store';
 import { Avatar, Icon, Stars, ZMark, fmtClock, fmtDur, useToast } from '../ui';
 import { RATE_MIN_SECONDS } from '../config';
+import { useBackHandler } from '../lib/back';
 import { countryName, flag } from '../lib/catalog';
 import { RateSheet, ReportSheet } from './Sheets';
 
@@ -407,6 +408,7 @@ export function Call({ flow, onClose, onAgain }: { flow: CallFlow; onClose: () =
     return () => clearTimeout(t);
   }, [phase, canNext, autoNext, rateOpen, callSecs, byOther, onAgain]);
 
+  useBackHandler(() => { if (phase === 'live' || phase === 'connecting') finish(true); else onClose(); });
   const showVideo = mode !== 'voice' && hasRemoteVideo;
   const inCall = phase === 'live' || phase === 'connecting';
   const showLocal = mode !== 'voice' && phase !== 'ended' && phase !== 'error' && phase !== 'prep';

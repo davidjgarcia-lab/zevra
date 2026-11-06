@@ -20,8 +20,14 @@ revoke all on public.app_settings from anon, authenticated;
 -- Guardar las credenciales de Cloudflare TURN (solo desde el SQL Editor)
 create or replace function public.set_turn_config(p_key_id text, p_token text) returns text
 language plpgsql security definer set search_path = public as $$
+declare v_id text; v_token text;
 begin
-  insert into app_settings (key, value) values ('cloudflare_turn', jsonb_build_object('key_id', p_key_id, 'token', p_token))
+  -- Tolerar errores al pegar: espacios, comillas o letras sueltas alrededor de los valores
+  v_id := substring(lower(p_key_id) from '[0-9a-f]{32}');
+  v_token := substring(lower(p_token) from '[0-9a-f]{64}');
+  if v_id is null then raise exception 'El Turn Token ID debe tener 32 caracteres (0-9, a-f).'; end if;
+  if v_token is null then raise exception 'El API Token debe tener 64 caracteres (0-9, a-f).'; end if;
+  insert into app_settings (key, value) values ('cloudflare_turn', jsonb_build_object('key_id', v_id, 'token', v_token))
   on conflict (key) do update set value = excluded.value, updated_at = now();
   delete from app_settings where key = 'ice_cache';
   return 'Credenciales de TURN guardadas';

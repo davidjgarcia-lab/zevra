@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type Peer from 'peerjs';
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { errText, supabase, type ProfileCard } from '../lib/supabase';
+import { errText, photoUrl, supabase, type ProfileCard } from '../lib/supabase';
 import { getLocalStream, openPeer, playRemoteAudio, stopRemoteAudio, stopStream, type MediaConnection } from '../lib/rtc';
 import { countryName, flag } from '../lib/catalog';
 import { ls, useApp } from '../store';
-import { Avatar, Check, Icon, Sheet, Spinner, Stars, Toggle, timeAgo, useToast } from '../ui';
+import { Avatar, Check, Icon, Sheet, Stars, Toggle, ZLoader, timeAgo, useToast } from '../ui';
 import { ShopCard } from './Home';
 import { ReportSheet } from './Sheets';
+import { useShotContext } from '../lib/shots';
 
 /** Espectadores simultáneos por directo (cada uno es una conexión directa con quien emite). */
-export const MAX_VIEWERS = 8;
+export const MAX_VIEWERS = 20;
+/** La miniatura del escaparate se renueva cada 15 minutos. */
+const THUMB_EVERY_MS = 15 * 60 * 1000;
 
-interface Live { id: string; host: string; title: string; intimate: boolean; started_at: string; heartbeat_at: string }
+interface Live { id: string; host: string; title: string; intimate: boolean; started_at: string; heartbeat_at: string; thumb_path?: string | null }
 
 /* ===================== Lista del Showroom ===================== */
 export function Showroom() {
@@ -24,7 +27,7 @@ export function Showroom() {
 
   const load = useCallback(async () => {
     const since = new Date(Date.now() - 60000).toISOString();
-    const { data } = await supabase.from('lives').select('id,host,title,intimate,started_at,heartbeat_at').is('ended_at', null).gte('heartbeat_at', since).order('started_at', { ascending: false });
+    const { data } = await supabase.from('lives').select('id,host,title,intimate,started_at,heartbeat_at,thumb_path').is('ended_at', null).gte('heartbeat_at', since).order('started_at', { ascending: false });
     const rows = (data as Live[]) ?? [];
     const ids = Array.from(new Set(rows.map((r) => r.host)));
     const { data: cards } = ids.length ? await supabase.from('profile_cards').select('*').in('id', ids) : { data: [] };
@@ -67,7 +70,7 @@ export function Showroom() {
         <div className="live-grid">
           {lives.map((l) => (
             <button key={l.id} className="live-tile" onClick={() => go({ name: 'live', id: l.id })}>
-              <div className="live-thumb"><Avatar id={l.host} path={l.card?.avatar_path} size={260} />{l.intimate && <span className="tag2 adult live-adult">+18</span>}<span className="live-badge">EN DIRECTO</span></div>
+              <div className="live-thumb">{l.thumb_path ? <LiveThumb path={l.thumb_path} /> : <Avatar id={l.host} path={l.card?.avatar_path} size={260} />}{l.intimate && <span className="tag2 adult live-adult">+18</span>}<span className="live-badge">EN DIRECTO</span></div>
               <div className="live-meta">
                 <b>{l.card?.alias ?? '…'}{l.card?.age ? `, ${l.card.age}` : ''} {l.card?.country && <span title={countryName(l.card.country)}>{flag(l.card.country)}</span>}</b>
                 <span>{l.title || 'Sin título'} · {timeAgo(l.started_at)}</span>
@@ -101,6 +104,29 @@ export function Showroom() {
   );
 }
 
+function LiveThumb({ path }: { path: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => { let on = true; photoUrl(path).then((u) => on && setUrl(u)); return () => { on = false; }; }, [path]);
+  return url ? <img src={url} alt="" className="live-thumb-img" /> : <span className="skel" style={{ position: 'absolute', inset: 0 }} />;
+}
+
+/** Ajusta la calidad enviada a cada espectador según cuántos haya (para aguantar hasta 20). */
+function tuneBitrate(conns: Map<string, MediaConnection>) {
+  const n = conns.size;
+  const max = n <= 4 ? 1_200_000 : n <= 10 ? 650_000 : 380_000;
+  conns.forEach((mc) => {
+    mc.peerConnection?.getSenders().forEach((snd) => {
+      if (snd.track?.kind !== 'video') return;
+      try {
+        const p = snd.getParameters();
+        if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+        p.encodings[0].maxBitrate = max;
+        snd.setParameters(p).catch(() => {});
+      } catch { /* navegador sin soporte */ }
+    });
+  });
+}
+
 /* ===================== Emitir en directo ===================== */
 export function Broadcast() {
   const { me, back, go, startCall } = useApp();
@@ -116,7 +142,12 @@ export function Broadcast() {
   const [cam, setCam] = useState(true);
   const [secs, setSecs] = useState(0);
   const [pick, setPick] = useState<{ id: string; alias: string } | null>(null);
+  const [camAsk, setCamAsk] = useState<{ id: string; alias: string } | null>(null);
+  const [guest, setGuest] = useState<{ id: string; alias: string } | null>(null);
   const video = useRef<HTMLVideoElement>(null);
+  const guestV = useRef<HTMLVideoElement>(null);
+  const guestRef = useRef<string | null>(null);
+  const guestMc = useRef<MediaConnection | null>(null);
   const R = useRef({ stream: null as MediaStream | null, peer: null as Peer | null, live: null as string | null, ch: null as RealtimeChannel | null,
     conns: new Map<string, MediaConnection>(), timers: [] as number[], onCall: null as ((mc: MediaConnection) => void) | null });
 
@@ -139,6 +170,7 @@ export function Broadcast() {
     r.conns.forEach((c) => { try { c.close(); } catch { /* */ } }); r.conns.clear();
     if (r.peer && r.onCall) r.peer.off('call', r.onCall);
     if (r.ch) { supabase.removeChannel(r.ch); r.ch = null; }
+    try { guestMc.current?.close(); } catch { /* */ }
     if (r.live) { supabase.rpc('end_live', { p_live: r.live }).then(() => {}); r.live = null; }
     stopStream(r.stream); r.stream = null;
   };
@@ -153,14 +185,24 @@ export function Broadcast() {
       const liveId = data as string;
       R.current.live = liveId;
       const onCall = (mc: MediaConnection) => {
-        const md = mc.metadata as { live?: string; viewer?: string } | undefined;
+        const md = mc.metadata as { live?: string; viewer?: string; cam?: boolean } | undefined;
         if (md?.live !== liveId) return;
+        // Cámara de un espectador que has aceptado ver: solo se recibe, no se envía nada
+        if (md.cam) {
+          if (md.viewer !== guestRef.current) { try { mc.close(); } catch { /* */ } return; }
+          mc.answer();
+          guestMc.current = mc;
+          mc.on('stream', (st: MediaStream) => { if (guestV.current) { guestV.current.srcObject = st; guestV.current.play().catch(() => {}); } });
+          mc.on('close', () => { if (guestMc.current === mc) { guestMc.current = null; guestRef.current = null; setGuest(null); } });
+          return;
+        }
         if (R.current.conns.size >= MAX_VIEWERS) { try { mc.close(); } catch { /* */ } return; }
         mc.answer(R.current.stream!);
         const key = md.viewer || mc.connectionId;
         R.current.conns.get(key)?.close();
         R.current.conns.set(key, mc);
-        mc.on('close', () => { if (R.current.conns.get(key) === mc) R.current.conns.delete(key); });
+        setTimeout(() => tuneBitrate(R.current.conns), 1500);
+        mc.on('close', () => { if (R.current.conns.get(key) === mc) R.current.conns.delete(key); tuneBitrate(R.current.conns); });
       };
       R.current.onCall = onCall;
       peer.on('call', onCall);
@@ -170,12 +212,42 @@ export function Broadcast() {
           setViewers(Object.entries(st).filter(([, v]) => v[0]?.role === 'viewer').map(([id, v]) => ({ id, alias: v[0].alias })));
         })
         .on('broadcast', { event: 'chat' }, ({ payload }) => setChat((c) => [...c.slice(-40), payload as never]))
+        .on('broadcast', { event: 'cam-request' }, ({ payload }) => {
+          const p = payload as { viewer: string; alias: string };
+          if (!guestRef.current) setCamAsk({ id: p.viewer, alias: p.alias });
+          else ch.send({ type: 'broadcast', event: 'cam-decline', payload: { viewer: p.viewer, busy: true } });
+        })
+        .on('broadcast', { event: 'cam-stop' }, ({ payload }) => {
+          if ((payload as { viewer: string }).viewer === guestRef.current) { try { guestMc.current?.close(); } catch { /* */ } guestRef.current = null; setGuest(null); }
+        })
         .subscribe((s) => { if (s === 'SUBSCRIBED') ch.track({ alias: me.alias, role: 'host' }); });
       R.current.ch = ch;
       R.current.timers.push(window.setInterval(() => supabase.rpc('live_heartbeat', { p_live: liveId, p_peer_id: peer.id }), 20000));
+      // Miniatura para el escaparate: una captura ahora y otra cada 15 minutos
+      setTimeout(() => snapThumb(liveId), 2500);
+      R.current.timers.push(window.setInterval(() => snapThumb(liveId), THUMB_EVERY_MS));
       R.current.timers.push(window.setInterval(() => setSecs((x) => x + 1), 1000));
       setStage('live');
     } catch (e) { toast(errText(e), true); }
+  };
+
+  const lastThumb = useRef<string | null>(null);
+  const snapThumb = async (liveId: string) => {
+    const v = video.current;
+    if (!v || !v.videoWidth || !cam) return;
+    try {
+      const w = 480, h = Math.round((v.videoHeight / v.videoWidth) * w);
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d')!.drawImage(v, 0, 0, w, h);
+      const blob: Blob | null = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.75));
+      if (!blob) return;
+      const path = `${me.id}/live/${liveId}-${Date.now()}.jpg`;
+      const up = await supabase.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg' });
+      if (up.error) return;
+      await supabase.rpc('set_live_thumb', { p_live: liveId, p_path: path });
+      if (lastThumb.current) supabase.storage.from('photos').remove([lastThumb.current]).then(() => {});
+      lastThumb.current = path;
+    } catch { /* la miniatura no es imprescindible */ }
   };
 
   const say = () => {
@@ -184,7 +256,23 @@ export function Broadcast() {
     R.current.ch.send({ type: 'broadcast', event: 'chat', payload: { id: `${Date.now()}`, from: me.id, alias: me.alias, text: t.slice(0, 300) } });
   };
 
-  const end = () => { stop(); setStage('ended'); };
+  const answerCam = (ok: boolean) => {
+    const a = camAsk; setCamAsk(null);
+    if (!a || !R.current.ch) return;
+    if (ok) { guestRef.current = a.id; setGuest(a); }
+    R.current.ch.send({ type: 'broadcast', event: ok ? 'cam-accept' : 'cam-decline', payload: { viewer: a.id } });
+  };
+  const closeGuest = () => {
+    const g = guestRef.current;
+    try { guestMc.current?.close(); } catch { /* */ }
+    guestRef.current = null; setGuest(null);
+    if (g) R.current.ch?.send({ type: 'broadcast', event: 'cam-stop', payload: { viewer: g } });
+  };
+
+  const end = () => {
+    if (lastThumb.current) supabase.storage.from('photos').remove([lastThumb.current]).then(() => {});
+    stop(); setStage('ended');
+  };
   const mm = `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 
   return (
@@ -211,7 +299,7 @@ export function Broadcast() {
 
       {stage === 'live' && (
         <>
-          <div className="call-chat" style={{ right: 14 }}>
+          <div className="call-chat live-chat-host">
             <div className="call-chat-list">
               {chat.slice(-8).map((m) => (
                 <button key={m.id} className={`call-chat-msg ${m.from === me.id ? 'me' : ''}`} onClick={() => m.from !== me.id && setPick({ id: m.from, alias: m.alias })}>
@@ -224,6 +312,13 @@ export function Broadcast() {
               <button className="cc sm" style={{ background: 'var(--coral)', color: 'var(--ink)' }} aria-label="Enviar" disabled={!text.trim()}><Icon n="send" c="s" /></button>
             </form>
           </div>
+          {guest && (
+            <div className="guest-pip">
+              <video ref={guestV} autoPlay playsInline muted />
+              <span className="guest-name">{guest.alias}</span>
+              <button className="guest-x" onClick={closeGuest} aria-label={`Dejar de ver a ${guest.alias}`}><Icon n="x" c="s" /></button>
+            </div>
+          )}
           {viewers.length > 0 && (
             <div className="viewer-strip">
               {viewers.map((v) => <button key={v.id} className="chip" onClick={() => setPick(v)}>{v.alias}</button>)}
@@ -245,6 +340,18 @@ export function Broadcast() {
           <button className="btn primary" onClick={() => go({ name: 'tabs', tab: 'chats' })}>Ver mensajes</button>
           <button className="btn" onClick={back}>Volver al Showroom</button>
         </div>
+      )}
+
+      {camAsk && (
+        <Sheet onClose={() => answerCam(false)} label="Quiere mostrarte su cámara">
+          <div className="center" style={{ fontSize: 40 }}>📷</div>
+          <h2 className="h2 center" style={{ margin: '6px 0 6px' }}>{camAsk.alias} quiere que le veas</h2>
+          <p className="small muted center" style={{ marginBottom: 16 }}>Si aceptas, verás su cámara en una ventana pequeña. Solo tú la verás, no tu público. Puedes cerrarla cuando quieras.</p>
+          <div className="grid">
+            <button className="btn primary" onClick={() => answerCam(true)}><Icon n="eye" c="s" /> Ver a {camAsk.alias}</button>
+            <button className="btn" onClick={() => answerCam(false)}>Ahora no</button>
+          </div>
+        </Sheet>
       )}
 
       {pick && (
@@ -285,10 +392,43 @@ export function WatchLive({ id }: { id: string }) {
   const [liked, setLiked] = useState(false);
   const [report, setReport] = useState(false);
   const [checks, setChecks] = useState([false, false]);
+  const [camState, setCamState] = useState<'off' | 'asking' | 'on'>('off');
+  useShotContext(host?.id, 'live');
   const video = useRef<HTMLVideoElement>(null);
-  const R = useRef({ mc: null as MediaConnection | null, ch: null as RealtimeChannel | null, dummy: null as MediaStream | null });
+  const selfV = useRef<HTMLVideoElement>(null);
+  const R = useRef({ mc: null as MediaConnection | null, ch: null as RealtimeChannel | null, dummy: null as MediaStream | null,
+    hostPeer: '' as string, camStream: null as MediaStream | null, camMc: null as MediaConnection | null, liveId: '' as string });
+
+  const stopCam = (notify: boolean) => {
+    try { R.current.camMc?.close(); } catch { /* */ }
+    stopStream(R.current.camStream); R.current.camStream = null; R.current.camMc = null;
+    if (notify) R.current.ch?.send({ type: 'broadcast', event: 'cam-stop', payload: { viewer: me.id } });
+    setCamState('off');
+  };
+  /** Quien emite ha aceptado verte: se le envía tu cámara (solo a esa persona). */
+  const sendCam = async () => {
+    try {
+      const st = await getLocalStream('social');
+      R.current.camStream = st;
+      setCamState('on');
+      setTimeout(() => { if (selfV.current) { selfV.current.srcObject = st; selfV.current.play().catch(() => {}); } }, 50);
+      const peer = await openPeer();
+      const mc = peer.call(R.current.hostPeer, st, { metadata: { live: R.current.liveId, viewer: me.id, cam: true } });
+      R.current.camMc = mc;
+      mc?.on('close', () => { if (R.current.camMc === mc) stopCam(false); });
+      toast(`${host?.alias ?? 'La persona'} ya te está viendo`);
+    } catch (e) { toast((e as Error).message || errText(e), true); stopCam(true); }
+  };
+  const askCam = () => {
+    if (!R.current.ch) return;
+    setCamState('asking');
+    R.current.ch.send({ type: 'broadcast', event: 'cam-request', payload: { viewer: me.id, alias: me.alias } });
+    toast(`Le hemos preguntado a ${host?.alias ?? 'quien emite'} si quiere verte`);
+    setTimeout(() => setCamState((x) => (x === 'asking' ? 'off' : x)), 60000);
+  };
 
   const cleanup = () => {
+    stopCam(false);
     try { R.current.mc?.close(); } catch { /* */ }
     if (R.current.ch) { supabase.removeChannel(R.current.ch); R.current.ch = null; }
     stopStream(R.current.dummy); stopRemoteAudio();
@@ -305,8 +445,17 @@ export function WatchLive({ id }: { id: string }) {
           const st = ch.presenceState() as Record<string, Array<{ role: string }>>;
           setViewers(Object.values(st).filter((v) => v[0]?.role === 'viewer').length);
         })
-        .on('broadcast', { event: 'chat' }, ({ payload }) => setChat((c) => [...c.slice(-40), payload as never]));
+        .on('broadcast', { event: 'chat' }, ({ payload }) => setChat((c) => [...c.slice(-40), payload as never]))
+        .on('broadcast', { event: 'cam-accept' }, ({ payload }) => { if ((payload as { viewer: string }).viewer === me.id) sendCam(); })
+        .on('broadcast', { event: 'cam-decline' }, ({ payload }) => {
+          const p = payload as { viewer: string; busy?: boolean };
+          if (p.viewer !== me.id) return;
+          setCamState('off');
+          toast(p.busy ? 'Ahora mismo está viendo a otra persona. Prueba en un rato.' : 'Ha preferido no verte ahora.', true);
+        })
+        .on('broadcast', { event: 'cam-stop' }, ({ payload }) => { if ((payload as { viewer: string }).viewer === me.id) { stopCam(false); toast('Ha dejado de verte'); } });
       R.current.ch = ch;
+      R.current.hostPeer = j.peer_id; R.current.liveId = l.id;
       // Esperar al tiempo real como mucho 4 s: si tarda, se entra igualmente (el aforo lo controla también quien emite)
       const subscribed = await new Promise<boolean>((res) => {
         const t = setTimeout(() => res(false), 4000);
@@ -339,7 +488,7 @@ export function WatchLive({ id }: { id: string }) {
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from('lives').select('id,host,title,intimate,started_at,heartbeat_at').eq('id', id).maybeSingle();
+      const { data } = await supabase.from('lives').select('id,host,title,intimate,started_at,heartbeat_at,thumb_path').eq('id', id).maybeSingle();
       if (!data) { setState('ended'); return; }
       const l = data as Live; setLive(l);
       supabase.from('profile_cards').select('*').eq('id', l.host).maybeSingle().then(({ data: c }) => setHost(c as ProfileCard));
@@ -384,7 +533,7 @@ export function WatchLive({ id }: { id: string }) {
         </div>
       )}
 
-      {(state === 'loading' || state === 'connecting') && <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}><Spinner /><span className="small">Entrando al directo…</span></div>}
+      {(state === 'loading' || state === 'connecting') && <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}><ZLoader size={56} /><span className="small">Entrando al directo…</span></div>}
       {['ended', 'full', 'error'].includes(state) && (
         <div className="pad" style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, textAlign: 'center' }}>
           <Icon n={state === 'full' ? 'users' : 'broadcast'} c="l" />
@@ -397,14 +546,25 @@ export function WatchLive({ id }: { id: string }) {
 
       {state === 'live' && (
         <>
-          <div className="call-chat">
+          {camState === 'on' && (
+            <div className="guest-pip self">
+              <video ref={selfV} autoPlay playsInline muted style={{ transform: 'scaleX(-1)' }} />
+              <span className="guest-name">Te está viendo</span>
+              <button className="guest-x" onClick={() => stopCam(true)} aria-label="Dejar de mostrarme"><Icon n="x" c="s" /></button>
+            </div>
+          )}
+          <div className="call-chat live-chat-viewer">
             <div className="call-chat-list">{chat.slice(-8).map((m) => <div key={m.id} className={`call-chat-msg ${m.from === me.id ? 'me' : ''}`}><b>{m.alias}:</b> {m.text}</div>)}</div>
             <form className="row" style={{ gap: 6 }} onSubmit={(e) => { e.preventDefault(); say(); }}>
               <input className="input" style={{ height: 42, background: 'rgba(14,14,16,.8)' }} value={text} onChange={(e) => setText(e.target.value)} placeholder="Comenta en el directo…" maxLength={300} />
               <button className="cc sm" style={{ background: 'var(--coral)', color: 'var(--ink)' }} aria-label="Enviar" disabled={!text.trim()}><Icon n="send" c="s" /></button>
             </form>
           </div>
-          <div className="side-tools" style={{ top: 'auto', bottom: 'calc(110px + var(--sb))' }}>
+          <div className="side-tools live-tools">
+            <button className={`cc sm ${camState !== 'off' ? 'off' : ''}`} onClick={() => (camState === 'off' ? askCam() : camState === 'on' ? stopCam(true) : undefined)}
+              aria-label={camState === 'on' ? 'Dejar de mostrarme' : camState === 'asking' ? 'Esperando respuesta' : 'Ofrecer que me vea'}>
+              <Icon n={camState === 'on' ? 'videoOff' : 'camera'} c="s" />
+            </button>
             <button className={`cc sm ${liked ? 'liked' : ''}`} onClick={like} aria-label="Me gusta"><Icon n="heart" c="s" /></button>
             {host && <button className="cc sm" onClick={() => { cleanup(); go({ name: 'chat', partner: host.id }); }} aria-label="Escribir en privado"><Icon n="chat" c="s" /></button>}
             {host && <button className="cc sm" onClick={() => { cleanup(); startCall({ kind: 'invite-out', mode: 'social', partner: host.id }); }} aria-label="Proponer videollamada privada"><Icon n="video" c="s" /></button>}
